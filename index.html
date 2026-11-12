@@ -48,7 +48,7 @@ import {getFirestore,initializeFirestore,persistentLocalCache,persistentMultiple
 var fbApp=initializeApp({apiKey:"AIzaSyDGIinG_HM97ez-BJUTID7PFDpea_5aRMc",authDomain:"duygu-app-c9242.firebaseapp.com",projectId:"duygu-app-c9242",storageBucket:"duygu-app-c9242.firebasestorage.app",messagingSenderId:"734448635978",appId:"1:734448635978:web:e93f1fffe0ca7aee7596b3"});
 var db;
 try{db=initializeFirestore(fbApp,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})})}catch(e){db=getFirestore(fbApp)}
-var col=collection(db,"items"),unsub=null,timer=null,HASH="5e4f0c7c5b12a0d0d4a884b2de3f75345cc206622c6b55abb0fbf066cf3b8d87",UK="gh.unlocked",LK="gh.lock";
+var col=collection(db,"items"),unsub=null,timer=null,HASH="3e13609e0eb920e5179b592556f1e929bc6c1d6dbbfdc8bef0e8b36f8928f475",UK="gh.unlocked",LK="gh.lock";
 
 var P=["Duygu","Işıl","Reyhan","Fatma","Aysun","Servet","Gülseven"],POOL="Havuz";
 var items=[],mode="exp",tab="ozet",delId=null,loaded=false;
