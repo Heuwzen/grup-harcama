@@ -40,6 +40,7 @@ input[type=text],input[type=number],select,textarea{width:100%;padding:11px;bord
 <div id="msg" class="card hide"></div>
 <section id="v-ozet"></section>
 <section id="v-ekle" class="hide"></section>
+<section id="v-cikar" class="hide"></section>
 <section id="v-gecmis" class="hide"></section>
 </main>
 <script type="module">
@@ -116,7 +117,7 @@ function calc(){
 }
 
 function renderTabs(){
-  var t=[["ozet","Özet"],["ekle","Ekle"],["gecmis","Geçmiş"]];
+  var t=[["ozet","Özet"],["ekle","Ekle"],["cikar","Çıkar"],["gecmis","Geçmiş"]];
   $("tabs").innerHTML=t.map(function(x){return '<button data-t="'+x[0]+'" class="'+(tab===x[0]?"on":"")+'">'+x[1]+'</button>'}).join("");
   $("tabs").querySelectorAll("button").forEach(function(bt){bt.onclick=function(){tab=bt.dataset.t;show()}});
 }
@@ -124,7 +125,7 @@ function show(){
   var inn=unlocked();
   $("v-login").classList.toggle("hide",inn);$("tabs").classList.toggle("hide",!inn);
   renderTabs();
-  ["ozet","ekle","gecmis"].forEach(function(v){$("v-"+v).classList.toggle("hide",!inn||v!==tab)});
+  ["ozet","ekle","cikar","gecmis"].forEach(function(v){$("v-"+v).classList.toggle("hide",!inn||v!==tab)});
 }
 
 function payRow(from,to,amt,label){
@@ -155,7 +156,7 @@ function renderOzet(){
     h+='<div class="row"><div><div>'+p+'</div><div class="mu">kişilere '+tl(owe)+' · kasaya '+tl(kp)+(get+ki?' · alacak '+tl(get+ki):'')+'</div></div><span class="'+(net>0?"pos":net<0?"neg":"mu")+'">'+(net>0?"+":net<0?"−":"")+tl(net)+'</span></div>';
   });
   h+='<div class="mu" style="margin-top:6px">+ alacaklı, − toplam borçlu</div></div>';
-  h+='<div class="mu" style="margin:-4px 2px 12px">Borç ödenince "Ödendi"ye bas. Kısmi ödeme için Ekle → Ödeme.</div>';
+  h+='<div class="mu" style="margin:-4px 2px 12px">Borç ödenince "Ödendi"ye bas. Kısmi ödeme için Çıkar sekmesini kullan.</div>';
   var vo=$("v-ozet");vo.innerHTML=h;
   vo.querySelectorAll("[data-pay]").forEach(function(x){x.onclick=function(){payKey=x.dataset.pay;renderOzet()}});
   vo.querySelectorAll("[data-pno]").forEach(function(x){x.onclick=function(){payKey=null;renderOzet()}});
@@ -169,7 +170,7 @@ function renderOzet(){
 
 function opts(withPool){return (withPool?[POOL]:[]).concat(P).map(function(p){return '<option value="'+p+'">'+nm(p)+'</option>'}).join("")}
 function renderEkle(){
-  var tabsH='<div class="tabs"><button data-m="exp" class="'+(mode==="exp"?"on":"")+'">Harcama</button><button data-m="dep" class="'+(mode==="dep"?"on":"")+'">Havuza para</button><button data-m="pay" class="'+(mode==="pay"?"on":"")+'">Ödeme</button></div>';
+  var tabsH='<div class="tabs"><button data-m="exp" class="'+(mode==="exp"?"on":"")+'">Harcama</button><button data-m="dep" class="'+(mode==="dep"?"on":"")+'">Havuza para</button></div>';
   var f='';
   if(mode==="exp"){
     f='<label>Açıklama</label><input type="text" id="f-d" placeholder="örn. Akşam yemeği">'+
@@ -178,8 +179,6 @@ function renderEkle(){
     '<label>Kimler paylaşıyor?</label><div class="chips">'+P.map(function(p){return '<label><input type="checkbox" class="f-s" value="'+p+'" checked>'+p+'</label>'}).join("")+'</div>';
   }else if(mode==="dep"){
     f='<label>Kim yatırdı?</label><select id="f-p">'+opts(false)+'</select><label>Tutar (TL)</label><input type="number" id="f-a" inputmode="decimal" step="0.01">';
-  }else{
-    f='<label>Kim ödedi?</label><select id="f-p">'+opts(true)+'</select><label>Kime?</label><select id="f-q">'+opts(true)+'</select><label>Tutar (TL)</label><input type="number" id="f-a" inputmode="decimal" step="0.01"><div class="mu" style="margin-top:6px">Borç kapatma: ödeme yapıldığında bakiyeler güncellenir.</div>';
   }
   $("v-ekle").innerHTML='<div class="card">'+tabsH+f+'<button class="btn" id="save">Kaydet</button><div class="mu" id="err" style="margin-top:8px"></div></div>';
   $("v-ekle").querySelectorAll("[data-m]").forEach(function(x){x.onclick=function(){mode=x.dataset.m;renderEkle()}});
@@ -195,17 +194,27 @@ function save(){
     if(!ds){err.textContent="Açıklama yaz.";return}
     if(!sh.length){err.textContent="En az bir kişi seç.";return}
     d.type="expense";d.desc=ds;d.payer=$("f-p").value;d.shares=sh;
-  }else if(mode==="dep"){d.type="deposit";d.payer=$("f-p").value;d.desc="Havuza yatırdı"}
-  else{
-    d.type="payment";d.from=$("f-p").value;d.to=$("f-q").value;
-    if(d.from===d.to){err.textContent="Farklı iki taraf seç.";return}
-    d.desc="Ödeme";
-  }
+  }else{d.type="deposit";d.payer=$("f-p").value;d.desc="Havuza yatırdı"}
   var b=$("save");b.disabled=true;b.textContent="Kaydediliyor…";
   setDoc(doc(col,uid()),d).then(function(){msg("Kaydedildi ✓");hideMsgLater()},fail);
   tab="ozet";renderEkle();show();
 }
 
+function renderCikar(){
+  $("v-cikar").innerHTML='<div class="card"><h2>Borç kapat</h2><div class="mu">Ödenen para borçtan düşülür: ödeyenin borcu, alanın alacağı ve kasa birlikte güncellenir.</div>'+
+  '<label>Kim ödedi?</label><select id="c-p">'+opts(true)+'</select><label>Kime?</label><select id="c-q">'+opts(true)+'</select>'+
+  '<label>Tutar (TL)</label><input type="number" id="c-a" inputmode="decimal" step="0.01">'+
+  '<button class="btn" id="c-save">Çıkar</button><div class="mu" id="c-err" style="margin-top:8px"></div></div>';
+  $("c-save").onclick=saveCikar;
+}
+function saveCikar(){
+  var err=$("c-err"),a=Math.round(parseFloat($("c-a").value.replace(",","."))*100),f=$("c-p").value,t=$("c-q").value;
+  if(!(a>0)){err.textContent="Geçerli bir tutar gir.";return}
+  if(f===t){err.textContent="Farklı iki taraf seç.";return}
+  var b=$("c-save");b.disabled=true;b.textContent="Kaydediliyor…";
+  setDoc(doc(col,uid()),{type:"payment",from:f,to:t,amount:a,ts:Date.now(),desc:"Ödeme"}).then(function(){msg("Borçtan düşüldü ✓");hideMsgLater()},fail);
+  tab="ozet";renderCikar();show();
+}
 function renderGecmis(){
   var l=items.slice().sort(function(a,b){return b.ts-a.ts});
   var h='<div class="card"><h2>Tüm kayıtlar</h2>';
@@ -284,7 +293,7 @@ $("go").onclick=login;
 $("pw").onkeydown=function(e){if(e.key==="Enter")login()};
 if(unlocked())listen();else lockMsg();
 show();
-renderEkle();refresh();
+renderEkle();renderCikar();refresh();
 </script>
 </body>
 </html>
