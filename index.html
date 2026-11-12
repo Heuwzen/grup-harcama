@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#2f6f5e">
 <title>Grup Harcama</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Harcama">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
 :root{--bg:#faf8f5;--card:#fff;--tx:#1f1d1a;--mu:#7a746b;--ln:#e8e3db;--ac:#2f6f5e;--acx:#fff;--pos:#1f7a4d;--neg:#b3402f}
 @media (prefers-color-scheme:dark){:root{--bg:#171614;--card:#222120;--tx:#f1eee9;--mu:#a09a90;--ln:#34322f;--ac:#5fb59e;--acx:#10231d;--pos:#6fd09b;--neg:#f08a76}}
@@ -29,7 +36,9 @@ input[type=text],input[type=number],select,textarea{width:100%;padding:11px;bord
 .sm{border:1px solid var(--neg);background:none;color:var(--neg);font-size:13px;padding:6px 12px;border-radius:8px;margin-top:4px}
 .ok{border:1px solid var(--pos);background:none;color:var(--pos);font-size:13px;padding:6px 12px;border-radius:8px;margin-top:4px}
 .big{font-size:26px;font-weight:700}
-.hide{display:none}
+#msg{position:fixed;left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));max-width:488px;margin:0 auto;z-index:10;display:flex;align-items:center;justify-content:space-between;gap:10px;box-shadow:0 6px 24px rgba(0,0,0,.25)}
+#msg .ok{margin:0;font-size:15px;padding:8px 14px;flex-shrink:0}
+.hide,#msg.hide{display:none}
 </style>
 </head>
 <body>
@@ -45,22 +54,32 @@ input[type=text],input[type=number],select,textarea{width:100%;padding:11px;bord
 </main>
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
-import {getFirestore,initializeFirestore,persistentLocalCache,persistentMultipleTabManager,collection,doc,setDoc,deleteDoc,onSnapshot,writeBatch} from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
+import {getFirestore,initializeFirestore,persistentLocalCache,persistentMultipleTabManager,collection,doc,setDoc,deleteDoc,onSnapshot,writeBatch,getDocs,query,orderBy,limit} from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
 
 var fbApp=initializeApp({apiKey:"AIzaSyDGIinG_HM97ez-BJUTID7PFDpea_5aRMc",authDomain:"duygu-app-c9242.firebaseapp.com",projectId:"duygu-app-c9242",storageBucket:"duygu-app-c9242.firebasestorage.app",messagingSenderId:"734448635978",appId:"1:734448635978:web:e93f1fffe0ca7aee7596b3"});
 var db;
 try{db=initializeFirestore(fbApp,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})})}catch(e){db=getFirestore(fbApp)}
-var col=collection(db,"items"),unsub=null,timer=null,HASH="3e13609e0eb920e5179b592556f1e929bc6c1d6dbbfdc8bef0e8b36f8928f475",UK="gh.unlocked",LK="gh.lock";
+var bcol=collection(db,"backups"),bkList=null,col=collection(db,"items"),unsub=null,timer=null,HASH="3e13609e0eb920e5179b592556f1e929bc6c1d6dbbfdc8bef0e8b36f8928f475",UK="gh.unlocked",LK="gh.lock";
 
 var DEF=["Duygu","Işıl","Reyhan","Fatma","Aysun","Servet","Gülseven"],POOL="Havuz",P=DEF.slice(),ACT=DEF.slice(),PT={},PKEY="",pdExists=false,rmName=null;
 var NAME_RE=/^[\p{L}\p{N} -]{1,20}$/u;
-var items=[],mode="exp",tab="ozet",delId=null,payKey=null,loaded=false;
+var trash=[],msgT=null,items=[],mode="exp",tab="ozet",delId=null,payKey=null,loaded=false;
 var $=function(i){return document.getElementById(i)};
 function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML}
 function tl(c){var n=Math.abs(c)/100;return n.toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2})+" TL"}
 function nm(n){return n===POOL?"Havuz (kasa)":n}
-function msg(t){var m=$("msg");m.textContent=t;m.classList.remove("hide")}
-function hideMsgLater(){setTimeout(function(){$("msg").classList.add("hide")},4000)}
+function msg(t,undo){
+  var m=$("msg");clearTimeout(msgT);m.innerHTML="";
+  var sp=document.createElement("span");sp.textContent=t;m.appendChild(sp);
+  if(undo){var b=document.createElement("button");b.className="ok";b.textContent="Geri al";
+    b.onclick=function(){b.disabled=true;undo().then(function(){msg("Geri alındı ✓");hideMsgLater()},fail)};m.appendChild(b)}
+  m.classList.remove("hide");
+}
+function hideMsgLater(ms){clearTimeout(msgT);msgT=setTimeout(function(){$("msg").classList.add("hide")},ms||4000)}
+function act(pr,text,undo){pr.then(function(){msg(text,undo);hideMsgLater(10000)},fail)}
+function remove(id){return setDoc(doc(col,id),{deleted:true,deletedAt:Date.now()},{merge:true})}
+function unremove(id){return setDoc(doc(col,id),{deleted:false},{merge:true})}
+function dt(ts){return ts?new Date(ts).toLocaleString("tr-TR",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):""}
 function fail(e){msg("Kaydedilemedi. İnternet bağlantını kontrol edip tekrar dene."+(e&&e.code?" ("+e.code+")":""))}
 function uid(){return "i"+Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
 
@@ -78,6 +97,7 @@ function clean(id,e){
   }else if(e.type==="deposit"){if(!isP(e.payer))return null;o.payer=e.payer}
   else if(e.type==="payment"){if(!isPP(e.from)||!isPP(e.to)||e.from===e.to)return null;o.from=e.from;o.to=e.to}
   else return null;
+  if(e.deleted===true){o.deleted=true;o.deletedAt=typeof e.deletedAt==="number"?e.deletedAt:0}
   return o;
 }
 function data(e){var o={},k;for(k in e)if(k!=="id")o[k]=e[k];return o}
@@ -158,14 +178,14 @@ function renderOzet(){
     h+='<div class="row"><div><div>'+p+'</div><div class="mu">kişilere '+tl(owe)+' · kasaya '+tl(kp)+(get+ki?' · alacak '+tl(get+ki):'')+'</div></div><span class="'+(net>0?"pos":net<0?"neg":"mu")+'">'+(net>0?"+":net<0?"−":"")+tl(net)+'</span></div>';
   });
   h+='<div class="mu" style="margin-top:6px">+ alacaklı, − toplam borçlu</div></div>';
-  h+='<div class="mu" style="margin:-4px 2px 12px">Borç ödenince "Ödendi"ye bas. Kısmi ödeme için Çıkar sekmesini kullan.</div>';
+  h+='<div class="mu" style="margin:-4px 2px 12px">Borç ödenince "Ödendi"ye bas. Kısmi ödeme için Çıkar sekmesini kullan. Her işlem "Geri al" ile ya da Geçmiş\'ten geri alınabilir.</div>';
   var vo=$("v-ozet");vo.innerHTML=h;
   vo.querySelectorAll("[data-pay]").forEach(function(x){x.onclick=function(){payKey=x.dataset.pay;renderOzet()}});
   vo.querySelectorAll("[data-pno]").forEach(function(x){x.onclick=function(){payKey=null;renderOzet()}});
   vo.querySelectorAll("[data-pdo]").forEach(function(x){x.onclick=function(){
     var f=x.dataset.pdo.split("|"),a=parseInt(f[2],10);payKey=null;
     if(!isPP(f[0])||!isPP(f[1])||!(a>0))return;
-    setDoc(doc(col,uid()),{type:"payment",from:f[0],to:f[1],amount:a,ts:Date.now(),desc:"Ödeme"}).then(function(){msg("Ödeme kaydedildi ✓");hideMsgLater()},fail);
+    var nid=uid();act(setDoc(doc(col,nid),{type:"payment",from:f[0],to:f[1],amount:a,ts:Date.now(),desc:"Ödeme"}),"Ödeme kaydedildi ✓",function(){return remove(nid)});
     renderOzet();
   }});
 }
@@ -198,7 +218,7 @@ function save(){
     d.type="expense";d.desc=ds;d.payer=$("f-p").value;d.shares=sh;
   }else{d.type="deposit";d.payer=$("f-p").value;d.desc="Havuza yatırdı"}
   var b=$("save");b.disabled=true;b.textContent="Kaydediliyor…";
-  setDoc(doc(col,uid()),d).then(function(){msg("Kaydedildi ✓");hideMsgLater()},fail);
+  var nid=uid();act(setDoc(doc(col,nid),d),"Kaydedildi ✓",function(){return remove(nid)});
   tab="ozet";renderEkle();show();
 }
 
@@ -224,7 +244,7 @@ function addPerson(){
   if(!NAME_RE.test(n)||n===POOL){er.textContent="Geçerli bir isim yaz (en fazla 20 harf).";return}
   var lo=n.toLocaleLowerCase("tr"),same=P.filter(function(x){return x.toLocaleLowerCase("tr")===lo})[0];
   if(same&&ACT.indexOf(same)>=0){er.textContent=same+" zaten grupta.";return}
-  setOn(same||n,true).then(function(){msg((same||n)+" gruba eklendi ✓");hideMsgLater()},fail);
+  var nn=same||n;act(setOn(nn,true),nn+" gruba eklendi ✓",function(){return setOn(nn,false)});
   $("np").value="";er.textContent="";
 }
 function renderCikar(){
@@ -239,7 +259,7 @@ function saveCikar(){
   if(!(a>0)){err.textContent="Geçerli bir tutar gir.";return}
   if(f===t){err.textContent="Farklı iki taraf seç.";return}
   var b=$("c-save");b.disabled=true;b.textContent="Kaydediliyor…";
-  setDoc(doc(col,uid()),{type:"payment",from:f,to:t,amount:a,ts:Date.now(),desc:"Ödeme"}).then(function(){msg("Borçtan düşüldü ✓");hideMsgLater()},fail);
+  var nid=uid();act(setDoc(doc(col,nid),{type:"payment",from:f,to:t,amount:a,ts:Date.now(),desc:"Ödeme"}),"Borçtan düşüldü ✓",function(){return remove(nid)});
   tab="ozet";renderCikar();show();
 }
 function renderGecmis(){
@@ -252,53 +272,90 @@ function renderGecmis(){
     if(e.type==="expense"){t=e.desc;s=nm(e.payer)+' ödedi · '+e.shares.length+' kişi paylaşıyor'+(e.custom?' (özel paylaşım)':'')}
     else if(e.type==="deposit"){t="Havuza para";s=e.payer+' yatırdı'}
     else{t="Ödeme";s=nm(e.from)+' → '+nm(e.to)}
+    if(e.ts)s+=' · '+dt(e.ts);
     var id=esc(e.id);
     h+='<div class="row"><div><div>'+esc(t)+'</div><div class="mu">'+esc(s)+'</div></div><div style="text-align:right"><div>'+tl(e.amount)+'</div>'+(delId===e.id?'<button class="sm" data-do="'+id+'">Evet, sil</button> <button class="sm" data-no="1">Vazgeç</button>':'<button class="sm" data-id="'+id+'">Sil</button>')+'</div></div>';
   });
   h+='</div>';
+  if(trash.length){
+    h+='<div class="card"><h2>Silinen kayıtlar</h2><div class="mu" style="margin-bottom:4px">Yanlışlıkla silinen kayıt buradan geri getirilir.</div>';
+    trash.slice().sort(function(a,b){return b.deletedAt-a.deletedAt}).forEach(function(e){
+      var t=e.type==="expense"?e.desc:e.type==="deposit"?"Havuza para ("+e.payer+")":"Ödeme ("+nm(e.from)+" → "+nm(e.to)+")";
+      h+='<div class="row"><div><div>'+esc(t)+'</div><div class="mu">silindi · '+esc(dt(e.deletedAt))+'</div></div><div style="text-align:right"><div>'+tl(e.amount)+'</div><button class="ok" data-undel="'+esc(e.id)+'">Geri getir</button></div></div>';
+    });
+    h+='</div>';
+  }
   h+='<div class="card"><h2>Kişiler</h2>';
   P.forEach(function(p){var on=ACT.indexOf(p)>=0;
     h+='<div class="row"><span>'+esc(p)+(on?'':' <span class="mu">(gruptan çıktı)</span>')+'</span><span>'+(on?(rmName===p?'<button class="sm" data-rmdo="'+p+'">Evet, çıkar</button> <button class="sm" data-rmno="1">Vazgeç</button>':'<button class="sm" data-rm="'+p+'">Gruptan çıkar</button>'):'<button class="ok" data-back="'+p+'">Geri ekle</button>')+'</span></div>'});
   h+='<div class="mu" style="margin-top:6px">Gruptan çıkan kişi yeni kayıtlarda görünmez. Eski kayıtları ve borcu Özet\'te kalır.</div><label>Yeni kişi</label><input type="text" id="np" maxlength="20" placeholder="İsim"><button class="btn2" id="npadd">Kişi ekle</button><div class="mu" id="nperr" style="margin-top:6px"></div></div>';
-  h+='<div class="card"><h2>Yedek</h2><div class="mu">Kayıtlar internette ortak tutulur: linki olan herkes aynı kayıtları görür ve ekleyebilir. Yine de ara sıra yedeği kopyalayıp bir yere kaydetmek iyi olur.</div><button class="btn2" id="bk">Yedeği kopyala</button><textarea id="bkt" rows="3" placeholder="Yedeği buraya yapıştır" style="margin-top:8px"></textarea><button class="btn2" id="rs">Yedeği yükle (herkes için mevcut kayıtların yerine geçer)</button></div>';
+  h+='<div class="card"><h2>Yedekler</h2><div class="mu">Her gece kayıtlar değiştiyse otomatik yedek alınır. Bir yedek yüklenmeden önce şu anki hâl de saklanır, yani yükleme de geri alınabilir.</div>';
+  if(bkList===null)h+='<button class="btn2" id="bkshow">Yedekleri göster</button>';
+  else if(!bkList.length)h+='<div class="mu" style="margin-top:8px">Henüz yedek yok.</div>';
+  else bkList.forEach(function(b,i){
+    h+='<div class="row"><div><div>'+(b.kind==="before"?"Yüklemeden önceki hâl":"Gece yedeği")+'</div><div class="mu">'+esc(dt(b.ts))+' · '+b.count+' kayıt</div></div><button class="ok" data-bkload="'+i+'">Yükle</button></div>';
+  });
+  h+='</div>';
+  h+='<div class="card"><h2>Elle yedek</h2><div class="mu">Kayıtları metin olarak kopyalayıp bir yere saklayabilir, sonra buraya yapıştırıp yükleyebilirsin.</div><button class="btn2" id="bk">Yedeği kopyala</button><textarea id="bkt" rows="3" placeholder="Yedeği buraya yapıştır" style="margin-top:8px"></textarea><button class="btn2" id="rs">Yedeği yükle (herkes için mevcut kayıtların yerine geçer)</button></div>';
   var vg=$("v-gecmis");vg.innerHTML=h;
+  vg.querySelectorAll("[data-undel]").forEach(function(x){x.onclick=function(){var id=x.dataset.undel;act(unremove(id),"Geri getirildi ✓",function(){return remove(id)})}});
   vg.querySelectorAll("[data-id]").forEach(function(x){x.onclick=function(){delId=x.dataset.id;renderGecmis()}});
   vg.querySelectorAll("[data-no]").forEach(function(x){x.onclick=function(){delId=null;renderGecmis()}});
   vg.querySelectorAll("[data-do]").forEach(function(x){x.onclick=function(){
     var id=x.dataset["do"];delId=null;
-    deleteDoc(doc(col,id)).then(function(){msg("Silindi ✓");hideMsgLater()},fail);
+    act(remove(id),"Silindi ✓",function(){return unremove(id)});
     renderGecmis();
   }});
   $("bk").onclick=function(){
-    var j=JSON.stringify(items);
+    var j=JSON.stringify(items.concat(trash));
     $("bkt").value=j;
     try{navigator.clipboard.writeText(j).then(function(){msg("Yedek kopyalandı ✓");hideMsgLater()},function(){msg("Yedek kutuya yazıldı, elle kopyala.")})}catch(e){msg("Yedek kutuya yazıldı, elle kopyala.")}
   };
   $("rs").onclick=restore;
+  if($("bkshow"))$("bkshow").onclick=function(){this.disabled=true;this.textContent="Yükleniyor…";loadBackups()};
+  vg.querySelectorAll("[data-bkload]").forEach(function(x){x.onclick=function(){var b=bkList[+x.dataset.bkload],a;
+    try{a=JSON.parse(b.data)}catch(e){msg("Bu yedek okunamadı.");return}
+    restoreFrom(a,(b.kind==="before"?"Yüklemeden önceki hâl":"Gece yedeği")+" ("+dt(b.ts)+")")}});
   $("npadd").onclick=addPerson;
   vg.querySelectorAll("[data-rm]").forEach(function(x){x.onclick=function(){rmName=x.dataset.rm;renderGecmis()}});
   vg.querySelectorAll("[data-rmno]").forEach(function(x){x.onclick=function(){rmName=null;renderGecmis()}});
   vg.querySelectorAll("[data-rmdo]").forEach(function(x){x.onclick=function(){var n=x.dataset.rmdo;rmName=null;
     if(ACT.length<2){msg("Grupta en az bir kişi kalmalı.");renderGecmis();return}
-    setOn(n,false).then(function(){msg(n+" gruptan çıkarıldı ✓");hideMsgLater()},fail);renderGecmis()}});
-  vg.querySelectorAll("[data-back]").forEach(function(x){x.onclick=function(){var n=x.dataset.back;setOn(n,true).then(function(){msg(n+" gruba geri eklendi ✓");hideMsgLater()},fail)}});
+    act(setOn(n,false),n+" gruptan çıkarıldı ✓",function(){return setOn(n,true)});renderGecmis()}});
+  vg.querySelectorAll("[data-back]").forEach(function(x){x.onclick=function(){var n=x.dataset.back;act(setOn(n,true),n+" gruba geri eklendi ✓",function(){return setOn(n,false)})}});
 }
-function restore(){
-  var a;
-  try{a=JSON.parse($("bkt").value);if(!Array.isArray(a))throw 1}catch(e){msg("Yedek okunamadı. Metni eksiksiz yapıştır.");return}
-  var next=a.map(function(e){return clean(e&&e.id?e.id:uid(),e)}).filter(Boolean);
-  if(!next.length){msg("Yedekte geçerli kayıt yok.");return}
-  if(!confirm(next.length+" kayıt yüklenecek ve şu anki "+items.length+" kaydın yerine geçecek. Herkes için değişir. Devam edilsin mi?"))return;
-  var ops=items.map(function(e){return ["del",e.id]}).concat(next.map(function(e){return ["set",e.id,data(e)]}));
+function applyRestore(next){
   var keep={};next.forEach(function(e){keep[e.id]=1});
-  ops=ops.filter(function(o){return !(o[0]==="del"&&keep[o[1]])});
+  var ops=items.concat(trash).filter(function(e){return !keep[e.id]}).map(function(e){return ["del",e.id]}).concat(next.map(function(e){return ["set",e.id,data(e)]}));
   var chain=Promise.resolve();
   for(var i=0;i<ops.length;i+=400)(function(part){chain=chain.then(function(){
     var b=writeBatch(db);
     part.forEach(function(o){if(o[0]==="del")b["delete"](doc(col,o[1]));else b.set(doc(col,o[1]),o[2])});
     return b.commit();
   })})(ops.slice(i,i+400));
-  chain.then(function(){msg("Yedek yüklendi ✓");hideMsgLater()},fail);
+  return chain;
+}
+function restoreFrom(a,what){
+  var next=(Array.isArray(a)?a:[]).map(function(e){return clean(e&&e.id?e.id:uid(),e)}).filter(Boolean);
+  if(!next.length){msg("Yedekte geçerli kayıt yok.");return}
+  var nAct=next.filter(function(e){return !e.deleted}).length;
+  if(!confirm(what+": "+nAct+" kayıt yüklenecek ve şu anki "+items.length+" kaydın yerine geçecek. Herkes için değişir. Devam edilsin mi?"))return;
+  var before=items.concat(trash).map(function(e){return Object.assign({},e)});
+  msg("Yedek yükleniyor…");
+  setDoc(doc(bcol,"before-"+Date.now()),{ts:Date.now(),kind:"before",count:items.length,data:JSON.stringify(before)})
+    .then(function(){return applyRestore(next)})
+    .then(function(){bkList=null;renderGecmis();msg("Yedek yüklendi ✓",function(){return applyRestore(before)});hideMsgLater(15000)},fail);
+}
+function restore(){
+  var a;
+  try{a=JSON.parse($("bkt").value);if(!Array.isArray(a))throw 1}catch(e){msg("Yedek okunamadı. Metni eksiksiz yapıştır.");return}
+  restoreFrom(a,"Yapıştırılan yedek");
+}
+function loadBackups(){
+  getDocs(query(bcol,orderBy("ts","desc"),limit(40))).then(function(snap){
+    bkList=snap.docs.map(function(d){var x=d.data();return {ts:typeof x.ts==="number"?x.ts:0,kind:x.kind,count:typeof x.count==="number"?x.count:0,data:typeof x.data==="string"?x.data:"[]"}});
+    renderGecmis();
+  },function(e){msg("Yedekler okunamadı."+(e&&e.code?" ("+e.code+")":""))});
 }
 function refresh(){renderOzet();renderGecmis()}
 
@@ -308,7 +365,8 @@ function listen(){
     loaded=true;clearTimeout(timer);
     var pd=null;snap.docs.forEach(function(d){if(d.id==="_people")pd=d.data()});
     setPeople(pd);
-    items=snap.docs.filter(function(d){return d.id!=="_people"}).map(function(d){return clean(d.id,d.data())}).filter(Boolean);
+    var all=snap.docs.filter(function(d){return d.id!=="_people"}).map(function(d){return clean(d.id,d.data())}).filter(Boolean);
+    items=all.filter(function(e){return !e.deleted});trash=all.filter(function(e){return e.deleted});
     refresh();
   },function(e){msg("Kayıtlar okunamadı."+(e&&e.code?" ("+e.code+")":""))});
 }
