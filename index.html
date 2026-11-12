@@ -52,7 +52,8 @@ var db;
 try{db=initializeFirestore(fbApp,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})})}catch(e){db=getFirestore(fbApp)}
 var col=collection(db,"items"),unsub=null,timer=null,HASH="3e13609e0eb920e5179b592556f1e929bc6c1d6dbbfdc8bef0e8b36f8928f475",UK="gh.unlocked",LK="gh.lock";
 
-var P=["Duygu","Işıl","Reyhan","Fatma","Aysun","Servet","Gülseven"],POOL="Havuz";
+var DEF=["Duygu","Işıl","Reyhan","Fatma","Aysun","Servet","Gülseven"],POOL="Havuz",P=DEF.slice(),ACT=DEF.slice(),PT={},PKEY="",pdExists=false,rmName=null;
+var NAME_RE=/^[\p{L}\p{N} -]{1,20}$/u;
 var items=[],mode="exp",tab="ozet",delId=null,payKey=null,loaded=false;
 var $=function(i){return document.getElementById(i)};
 function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML}
@@ -153,6 +154,7 @@ function renderOzet(){
     var owe=0,get=0;
     tr.forEach(function(t){if(t[0]===p)owe+=t[2];if(t[1]===p)get+=t[2]});
     var kp=Math.max(d.bP[p],0),ki=Math.max(-d.bP[p],0),net=get+ki-owe-kp;
+    if(ACT.indexOf(p)<0&&!owe&&!get&&!kp&&!ki)return;
     h+='<div class="row"><div><div>'+p+'</div><div class="mu">kişilere '+tl(owe)+' · kasaya '+tl(kp)+(get+ki?' · alacak '+tl(get+ki):'')+'</div></div><span class="'+(net>0?"pos":net<0?"neg":"mu")+'">'+(net>0?"+":net<0?"−":"")+tl(net)+'</span></div>';
   });
   h+='<div class="mu" style="margin-top:6px">+ alacaklı, − toplam borçlu</div></div>';
@@ -168,7 +170,7 @@ function renderOzet(){
   }});
 }
 
-function opts(withPool){return (withPool?[POOL]:[]).concat(P).map(function(p){return '<option value="'+p+'">'+nm(p)+'</option>'}).join("")}
+function opts(withPool){return (withPool?[POOL]:[]).concat(ACT).map(function(p){return '<option value="'+p+'">'+nm(p)+'</option>'}).join("")}
 function renderEkle(){
   var tabsH='<div class="tabs"><button data-m="exp" class="'+(mode==="exp"?"on":"")+'">Harcama</button><button data-m="dep" class="'+(mode==="dep"?"on":"")+'">Havuza para</button></div>';
   var f='';
@@ -176,7 +178,7 @@ function renderEkle(){
     f='<label>Açıklama</label><input type="text" id="f-d" placeholder="örn. Akşam yemeği">'+
     '<label>Tutar (TL)</label><input type="number" id="f-a" inputmode="decimal" step="0.01">'+
     '<label>Kim ödedi?</label><select id="f-p">'+opts(true)+'</select>'+
-    '<label>Kimler paylaşıyor?</label><div class="chips">'+P.map(function(p){return '<label><input type="checkbox" class="f-s" value="'+p+'" checked>'+p+'</label>'}).join("")+'</div>';
+    '<label>Kimler paylaşıyor?</label><div class="chips">'+ACT.map(function(p){return '<label><input type="checkbox" class="f-s" value="'+p+'" checked>'+p+'</label>'}).join("")+'</div>';
   }else if(mode==="dep"){
     f='<label>Kim yatırdı?</label><select id="f-p">'+opts(false)+'</select><label>Tutar (TL)</label><input type="number" id="f-a" inputmode="decimal" step="0.01">';
   }
@@ -200,6 +202,31 @@ function save(){
   tab="ozet";renderEkle();show();
 }
 
+function setPeople(pd){
+  var m=pd&&pd.people&&typeof pd.people==="object"?pd.people:null,list=[],k;
+  if(m)for(k in m){var v=m[k];if(NAME_RE.test(k)&&k!==POOL&&v&&typeof v==="object")list.push([k,v.on!==false,typeof v.t==="number"?v.t:0])}
+  pdExists=list.length>0;
+  if(!list.length)list=DEF.map(function(n,i){return [n,true,i]});
+  list.sort(function(a,b){return a[2]-b[2]});
+  var key=JSON.stringify(list);if(key===PKEY)return;PKEY=key;
+  P=list.map(function(x){return x[0]});ACT=list.filter(function(x){return x[1]}).map(function(x){return x[0]});
+  PT={};list.forEach(function(x){PT[x[0]]=x[2]});
+  renderEkle();renderCikar();
+}
+function setOn(n,on){
+  var o={},t=PT[n]!=null?PT[n]:Date.now();
+  if(!pdExists)P.forEach(function(x){o[x]={on:ACT.indexOf(x)>=0,t:PT[x]}});
+  o[n]={on:on,t:t};
+  return setDoc(doc(col,"_people"),{type:"people",people:o},{merge:true});
+}
+function addPerson(){
+  var n=$("np").value.trim().replace(/\s+/g," "),er=$("nperr");
+  if(!NAME_RE.test(n)||n===POOL){er.textContent="Geçerli bir isim yaz (en fazla 20 harf).";return}
+  var lo=n.toLocaleLowerCase("tr"),same=P.filter(function(x){return x.toLocaleLowerCase("tr")===lo})[0];
+  if(same&&ACT.indexOf(same)>=0){er.textContent=same+" zaten grupta.";return}
+  setOn(same||n,true).then(function(){msg((same||n)+" gruba eklendi ✓");hideMsgLater()},fail);
+  $("np").value="";er.textContent="";
+}
 function renderCikar(){
   $("v-cikar").innerHTML='<div class="card"><h2>Borç kapat</h2><div class="mu">Ödenen para borçtan düşülür: ödeyenin borcu, alanın alacağı ve kasa birlikte güncellenir.</div>'+
   '<label>Kim ödedi?</label><select id="c-p">'+opts(true)+'</select><label>Kime?</label><select id="c-q">'+opts(true)+'</select>'+
@@ -229,6 +256,10 @@ function renderGecmis(){
     h+='<div class="row"><div><div>'+esc(t)+'</div><div class="mu">'+esc(s)+'</div></div><div style="text-align:right"><div>'+tl(e.amount)+'</div>'+(delId===e.id?'<button class="sm" data-do="'+id+'">Evet, sil</button> <button class="sm" data-no="1">Vazgeç</button>':'<button class="sm" data-id="'+id+'">Sil</button>')+'</div></div>';
   });
   h+='</div>';
+  h+='<div class="card"><h2>Kişiler</h2>';
+  P.forEach(function(p){var on=ACT.indexOf(p)>=0;
+    h+='<div class="row"><span>'+esc(p)+(on?'':' <span class="mu">(gruptan çıktı)</span>')+'</span><span>'+(on?(rmName===p?'<button class="sm" data-rmdo="'+p+'">Evet, çıkar</button> <button class="sm" data-rmno="1">Vazgeç</button>':'<button class="sm" data-rm="'+p+'">Gruptan çıkar</button>'):'<button class="ok" data-back="'+p+'">Geri ekle</button>')+'</span></div>'});
+  h+='<div class="mu" style="margin-top:6px">Gruptan çıkan kişi yeni kayıtlarda görünmez. Eski kayıtları ve borcu Özet\'te kalır.</div><label>Yeni kişi</label><input type="text" id="np" maxlength="20" placeholder="İsim"><button class="btn2" id="npadd">Kişi ekle</button><div class="mu" id="nperr" style="margin-top:6px"></div></div>';
   h+='<div class="card"><h2>Yedek</h2><div class="mu">Kayıtlar internette ortak tutulur: linki olan herkes aynı kayıtları görür ve ekleyebilir. Yine de ara sıra yedeği kopyalayıp bir yere kaydetmek iyi olur.</div><button class="btn2" id="bk">Yedeği kopyala</button><textarea id="bkt" rows="3" placeholder="Yedeği buraya yapıştır" style="margin-top:8px"></textarea><button class="btn2" id="rs">Yedeği yükle (herkes için mevcut kayıtların yerine geçer)</button></div>';
   var vg=$("v-gecmis");vg.innerHTML=h;
   vg.querySelectorAll("[data-id]").forEach(function(x){x.onclick=function(){delId=x.dataset.id;renderGecmis()}});
@@ -244,6 +275,13 @@ function renderGecmis(){
     try{navigator.clipboard.writeText(j).then(function(){msg("Yedek kopyalandı ✓");hideMsgLater()},function(){msg("Yedek kutuya yazıldı, elle kopyala.")})}catch(e){msg("Yedek kutuya yazıldı, elle kopyala.")}
   };
   $("rs").onclick=restore;
+  $("npadd").onclick=addPerson;
+  vg.querySelectorAll("[data-rm]").forEach(function(x){x.onclick=function(){rmName=x.dataset.rm;renderGecmis()}});
+  vg.querySelectorAll("[data-rmno]").forEach(function(x){x.onclick=function(){rmName=null;renderGecmis()}});
+  vg.querySelectorAll("[data-rmdo]").forEach(function(x){x.onclick=function(){var n=x.dataset.rmdo;rmName=null;
+    if(ACT.length<2){msg("Grupta en az bir kişi kalmalı.");renderGecmis();return}
+    setOn(n,false).then(function(){msg(n+" gruptan çıkarıldı ✓");hideMsgLater()},fail);renderGecmis()}});
+  vg.querySelectorAll("[data-back]").forEach(function(x){x.onclick=function(){var n=x.dataset.back;setOn(n,true).then(function(){msg(n+" gruba geri eklendi ✓");hideMsgLater()},fail)}});
 }
 function restore(){
   var a;
@@ -268,7 +306,9 @@ function listen(){
   timer=setTimeout(function(){if(!loaded)msg("Kayıtlara ulaşılamadı. İnternet bağlantını kontrol et.")},10000);
   unsub=onSnapshot(col,function(snap){
     loaded=true;clearTimeout(timer);
-    items=snap.docs.map(function(d){return clean(d.id,d.data())}).filter(Boolean);
+    var pd=null;snap.docs.forEach(function(d){if(d.id==="_people")pd=d.data()});
+    setPeople(pd);
+    items=snap.docs.filter(function(d){return d.id!=="_people"}).map(function(d){return clean(d.id,d.data())}).filter(Boolean);
     refresh();
   },function(e){msg("Kayıtlar okunamadı."+(e&&e.code?" ("+e.code+")":""))});
 }
