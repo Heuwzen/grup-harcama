@@ -27,6 +27,7 @@ input[type=text],input[type=number],select,textarea{width:100%;padding:11px;bord
 .btn{width:100%;margin-top:14px;padding:13px;border:0;border-radius:12px;background:var(--ac);color:var(--acx);font-size:16px;font-weight:600}
 .btn2{width:100%;margin-top:8px;padding:11px;border:1px solid var(--ln);border-radius:12px;background:none;color:var(--tx);font-size:15px}
 .sm{border:1px solid var(--neg);background:none;color:var(--neg);font-size:13px;padding:6px 12px;border-radius:8px;margin-top:4px}
+.ok{border:1px solid var(--pos);background:none;color:var(--pos);font-size:13px;padding:6px 12px;border-radius:8px;margin-top:4px}
 .big{font-size:26px;font-weight:700}
 .hide{display:none}
 </style>
@@ -51,7 +52,7 @@ try{db=initializeFirestore(fbApp,{localCache:persistentLocalCache({tabManager:pe
 var col=collection(db,"items"),unsub=null,timer=null,HASH="3e13609e0eb920e5179b592556f1e929bc6c1d6dbbfdc8bef0e8b36f8928f475",UK="gh.unlocked",LK="gh.lock";
 
 var P=["Duygu","Işıl","Reyhan","Fatma","Aysun","Servet","Gülseven"],POOL="Havuz";
-var items=[],mode="exp",tab="ozet",delId=null,loaded=false;
+var items=[],mode="exp",tab="ozet",delId=null,payKey=null,loaded=false;
 var $=function(i){return document.getElementById(i)};
 function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML}
 function tl(c){var n=Math.abs(c)/100;return n.toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2})+" TL"}
@@ -126,19 +127,24 @@ function show(){
   ["ozet","ekle","gecmis"].forEach(function(v){$("v-"+v).classList.toggle("hide",!inn||v!==tab)});
 }
 
+function payRow(from,to,amt,label){
+  var k=from+"|"+to+"|"+amt,a=esc(k);
+  var btn=payKey===k?'<button class="ok" data-pdo="'+a+'">Evet, ödendi</button> <button class="sm" data-pno="1">Vazgeç</button>':'<button class="ok" data-pay="'+a+'">Ödendi</button>';
+  return '<div class="row"><span>'+label+'</span><div style="text-align:right;flex-shrink:0"><div>'+tl(amt)+'</div>'+btn+'</div></div>';
+}
 function renderOzet(){
   if(!loaded){$("v-ozet").innerHTML='<div class="card mu">Kayıtlar yükleniyor…</div>';return}
   var d=calc(),tr=settle(d.bA),tot=0,ptot=0,pool=d.pool;
   var h='<div class="card"><h2>Havuzda kalan</h2><div class="big '+(pool<0?"neg":"")+'">'+(pool<0?"−":"")+tl(pool)+'</div><div class="mu">Toplanıp henüz harcanmayan para</div></div>';
   h+='<div class="card"><h2>Kişilere borç (kim kime)</h2>';
   if(!tr.length)h+='<div class="mu">Kişiler arasında borç yok.</div>';
-  tr.forEach(function(t){tot+=t[2];h+='<div class="row"><span>'+esc(t[0])+' → <b>'+esc(t[1])+'</b></span><span>'+tl(t[2])+'</span></div>'});
+  tr.forEach(function(t){tot+=t[2];h+=payRow(t[0],t[1],t[2],esc(t[0])+' → <b>'+esc(t[1])+'</b>')});
   h+='<div class="row"><b>Toplam</b><b>'+tl(tot)+'</b></div></div>';
   h+='<div class="card"><h2>Kasaya borç</h2>';
   var any=false;
   P.forEach(function(p){var v=d.bP[p];
-    if(v>0){any=true;ptot+=v;h+='<div class="row"><span>'+p+' → <b>Havuz (kasa)</b></span><span>'+tl(v)+'</span></div>'}
-    else if(v<0){any=true;h+='<div class="row"><span>Havuz (kasa) → <b>'+p+'</b> (iade)</span><span>'+tl(v)+'</span></div>'}});
+    if(v>0){any=true;ptot+=v;h+=payRow(p,POOL,v,p+' → <b>Havuz (kasa)</b>')}
+    else if(v<0){any=true;h+=payRow(POOL,p,-v,'Havuz (kasa) → <b>'+p+'</b> (iade)')}});
   if(!any)h+='<div class="mu">Kasaya borç yok.</div>';
   h+='<div class="row"><b>Kasaya toplam borç</b><b>'+tl(ptot)+'</b></div></div>';
   h+='<div class="card"><h2>Kişi başı toplam</h2>';
@@ -149,7 +155,16 @@ function renderOzet(){
     h+='<div class="row"><div><div>'+p+'</div><div class="mu">kişilere '+tl(owe)+' · kasaya '+tl(kp)+(get+ki?' · alacak '+tl(get+ki):'')+'</div></div><span class="'+(net>0?"pos":net<0?"neg":"mu")+'">'+(net>0?"+":net<0?"−":"")+tl(net)+'</span></div>';
   });
   h+='<div class="mu" style="margin-top:6px">+ alacaklı, − toplam borçlu</div></div>';
-  $("v-ozet").innerHTML=h;
+  h+='<div class="mu" style="margin:-4px 2px 12px">Borç ödenince "Ödendi"ye bas. Kısmi ödeme için Ekle → Ödeme.</div>';
+  var vo=$("v-ozet");vo.innerHTML=h;
+  vo.querySelectorAll("[data-pay]").forEach(function(x){x.onclick=function(){payKey=x.dataset.pay;renderOzet()}});
+  vo.querySelectorAll("[data-pno]").forEach(function(x){x.onclick=function(){payKey=null;renderOzet()}});
+  vo.querySelectorAll("[data-pdo]").forEach(function(x){x.onclick=function(){
+    var f=x.dataset.pdo.split("|"),a=parseInt(f[2],10);payKey=null;
+    if(!isPP(f[0])||!isPP(f[1])||!(a>0))return;
+    setDoc(doc(col,uid()),{type:"payment",from:f[0],to:f[1],amount:a,ts:Date.now(),desc:"Ödeme"}).then(function(){msg("Ödeme kaydedildi ✓");hideMsgLater()},fail);
+    renderOzet();
+  }});
 }
 
 function opts(withPool){return (withPool?[POOL]:[]).concat(P).map(function(p){return '<option value="'+p+'">'+nm(p)+'</option>'}).join("")}
