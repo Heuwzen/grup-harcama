@@ -46,6 +46,7 @@ input[type=text],input[type=number],select,textarea{width:100%;padding:11px;bord
 <body>
 <main>
 <h1>Grup Harcama</h1>
+<div id="net" class="card mu hide" style="padding:10px 12px"></div>
 <section id="v-login" class="hide"><div class="card"><h2>Giriş</h2><div class="mu">Grubun şifresini gir. Bu telefon şifreyi hatırlar.</div><input type="password" id="pw" inputmode="numeric" autocomplete="off" style="margin-top:10px;width:100%;padding:11px;border:1px solid var(--ln);border-radius:10px;background:var(--bg);color:var(--tx);font-size:16px"><button class="btn" id="go">Giriş yap</button><div class="mu" id="pwerr" style="margin-top:8px"></div></div></section>
 <div class="tabs hide" id="tabs"></div>
 <div id="msg" class="card hide"></div>
@@ -66,34 +67,59 @@ var col=collection(db,"items"),bcol=collection(db,"backups"),unsub=null,timer=nu
 // The shared people list is the doc items/_people. Removing someone only hides them from new entries.
 var DEF=["Duygu","Işıl","Reyhan","Fatma","Aysun","Servet","Gülseven"],POOL="Havuz",P=DEF.slice(),ACT=DEF.slice(),PT={},PKEY="",pdExists=false,EXTRA=[];
 var NAME_RE=/^[\p{L}\p{N} -]{1,20}$/u,ID_RE=/^[A-Za-z0-9-][A-Za-z0-9_-]{0,63}$/;
-var items=[],trash=[],logs=[],bkList=null,logAll=false,msgT=null,mode="exp",tab="ozet",delId=null,payKey=null,rmName=null,loaded=false;
+var items=[],trash=[],logs=[],raw={},P0=P.slice(),meta={fromCache:false,hasPendingWrites:false},busy={},bkList=null,logAll=false,msgT=null,mode="exp",tab="ozet",delId=null,payKey=null,rmName=null,loaded=false;
+var MAXA=1000000000; // 10 milyon TL, in kuruş
 var $=function(i){return document.getElementById(i)};
-function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML}
+function esc(s){return String(s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
 function tl(c){var n=Math.abs(c)/100;return n.toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2})+" TL"}
 function nm(n){return n===POOL?"Havuz (kasa)":n}
-function dt(ts){return ts?new Date(ts).toLocaleString("tr-TR",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):""}
+function dt(ts){if(!ts)return "";var d=new Date(ts),o={day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"};if(d.getFullYear()!==new Date().getFullYear())o.year="numeric";return d.toLocaleString("tr-TR",o)}
+// Amounts typed the Turkish way: "400", "400,50", "1.000", "1.250,75". Returns kuruş, or NaN when unclear.
+function parseTL(s){
+  s=String(s||"").replace(/\s|TL|₺/gi,"");
+  if(!/^\d[\d.,]*$/.test(s))return NaN;
+  var c=s.lastIndexOf(","),d=s.lastIndexOf("."),ip=s,fr="";
+  if(c>=0&&d>=0){
+    if(c>d){ip=s.slice(0,c);fr=s.slice(c+1);if(!/^\d{1,3}(\.\d{3})*$/.test(ip))return NaN;ip=ip.replace(/\./g,"")}
+    else{ip=s.slice(0,d);fr=s.slice(d+1);if(!/^\d{1,3}(,\d{3})*$/.test(ip))return NaN;ip=ip.replace(/,/g,"")}
+  }else if(c>=0){if(s.indexOf(",")!==c)return NaN;ip=s.slice(0,c);fr=s.slice(c+1)}
+  else if(d>=0){
+    if(/^\d{1,3}(\.\d{3})+$/.test(s))ip=s.replace(/\./g,"");
+    else if(s.indexOf(".")===d){ip=s.slice(0,d);fr=s.slice(d+1)}
+    else return NaN;
+  }
+  if(!/^\d+$/.test(ip)||!/^\d{0,2}$/.test(fr))return NaN;
+  var k=parseInt(ip,10)*100+(fr?parseInt((fr+"0").slice(0,2),10):0);
+  return Number.isSafeInteger(k)&&k>0&&k<=MAXA?k:NaN;
+}
+function amtField(id){return '<input type="text" id="'+id+'" inputmode="decimal" autocomplete="off" placeholder="örn. 400 veya 1.250,50"><div class="mu" id="'+id+'-pv" style="margin-top:4px;min-height:18px"></div>'}
+function bindAmt(id){var el=$(id),pv=$(id+"-pv");if(!el)return;var up=function(){var v=el.value.trim(),k=parseTL(v);pv.textContent=!v?"":k>0?"Kaydedilecek tutar: "+tl(k):"Tutar anlaşılmadı. Örnek: 400 veya 1.250,50";pv.style.color=v&&!(k>0)?"var(--neg)":""};el.oninput=up;up()}
+function hash(s){var h1=0xdeadbeef,h2=0x41c6ce57,i,ch;for(i=0;i<s.length;i++){ch=s.charCodeAt(i);h1=Math.imul(h1^ch,2654435761);h2=Math.imul(h2^ch,1597334677)}h1=Math.imul(h1^(h1>>>16),2246822507)^Math.imul(h2^(h2>>>13),3266489909);h2=Math.imul(h2^(h2>>>16),2246822507)^Math.imul(h1^(h1>>>13),3266489909);return (4294967296*(2097151&h2)+(h1>>>0)).toString(36)}
 function uid(){return "i"+Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
 function lid(){return "_log_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
 function msg(t,btn,fn){
   var m=$("msg");clearTimeout(msgT);m.innerHTML="";
   var sp=document.createElement("span");sp.textContent=t;m.appendChild(sp);
-  if(btn){var b=document.createElement("button");b.className="ok";b.textContent=btn;b.onclick=function(){b.disabled=true;fn()};m.appendChild(b)}
+  if(btn){var b=document.createElement("button");b.className="ok";b.textContent=btn;b.onclick=function(){if(fn()!==false)b.disabled=true};m.appendChild(b)}
   m.classList.remove("hide");
 }
 function hideMsgLater(ms){clearTimeout(msgT);msgT=setTimeout(function(){$("msg").classList.add("hide")},ms||4000)}
 function fail(e){msg(e&&e.msg?e.msg:"Kaydedilemedi. İnternet bağlantını kontrol edip tekrar dene."+(e&&e.code?" ("+e.code+")":""))}
 
 // Records come from a shared database: keep only well-formed ones.
-function isP(n){return P.indexOf(n)>=0||EXTRA.indexOf(n)>=0}
+// Any well-formed name counts as a person, even one missing from the people list (it then shows as out of the group), so no record is hidden.
+function isP(n){return typeof n==="string"&&n!==POOL&&NAME_RE.test(n)}
 function isPP(n){return n===POOL||isP(n)}
 function clean(id,e){
   if(!e||typeof e!=="object")return null;
-  var a=e.amount;if(typeof a!=="number"||!(a>0)||Math.round(a)!==a)return null;
+  var a=e.amount;if(!Number.isSafeInteger(a)||!(a>0))return null;
   var o={id:String(id),type:e.type,amount:a,ts:typeof e.ts==="number"?e.ts:0,desc:typeof e.desc==="string"?e.desc:""};
   if(e.type==="expense"){
     if(!isPP(e.payer)||!Array.isArray(e.shares))return null;
-    o.payer=e.payer;o.shares=e.shares.filter(isP);if(!o.shares.length)return null;
-    if(e.custom&&typeof e.custom==="object"){var c={},k;for(k in e.custom){if(isP(k)&&typeof e.custom[k]==="number")c[k]=e.custom[k]}o.custom=c}
+    o.payer=e.payer;o.shares=e.shares.filter(function(n,i,l){return isP(n)&&l.indexOf(n)===i});if(!o.shares.length)return null;
+    if(e.v===2)o.v=2;
+    // A custom split is used only when every part is a whole kuruş amount and the parts add up to the total; otherwise the split is equal.
+    if(e.custom&&typeof e.custom==="object"){var c={},k,sum=0,ok=true,n=0;for(k in e.custom){var x=e.custom[k];if(!isP(k)||!Number.isSafeInteger(x)||x<0){ok=false;break}c[k]=x;sum+=x;n++}if(ok&&n&&sum===a)o.custom=c}
   }else if(e.type==="deposit"){if(!isP(e.payer))return null;o.payer=e.payer}
   else if(e.type==="payment"){if(!isPP(e.from)||!isPP(e.to)||e.from===e.to)return null;o.from=e.from;o.to=e.to}
   else return null;
@@ -115,90 +141,98 @@ function cleanLog(id,e){
   return o;
 }
 function data(e){var o={},k;for(k in e)if(k!=="id")o[k]=e[k];return o}
-function title(e){return e.type==="expense"?e.desc:e.type==="deposit"?"Havuza para ("+e.payer+")":"Ödeme ("+nm(e.from)+" → "+nm(e.to)+")"}
+function title(e){return e.type==="expense"?e.desc+" ("+nm(e.payer)+" ödedi)":e.type==="deposit"?"Havuza para ("+e.payer+")":"Ödeme ("+nm(e.from)+" → "+nm(e.to)+")"}
+function who(e){return e.type==="expense"?nm(e.payer)+" ödedi · "+(e.custom?"özel paylaşım: ":"paylaşan: ")+e.shares.join(", "):e.type==="deposit"?e.payer+" kasaya yatırdı":nm(e.from)+" → "+nm(e.to)}
+function names(e){var l=[e.payer,e.from,e.to].concat(e.shares||[]).concat(e.custom?Object.keys(e.custom):[]);return l.filter(isP)}
 
 function split(amt,list){var b=Math.floor(amt/list.length),r=amt-b*list.length,o={};list.forEach(function(p,i){o[p]=b+(i<r?1:0)});return o}
-function sharesOf(e){return e.custom||split(e.amount,e.shares)}
-function settle(b){
-  var c=[],d=[],out=[],k;
-  for(k in b){if(b[k]>0)c.push([k,b[k]]);else if(b[k]<0)d.push([k,-b[k]])}
-  c.sort(function(x,y){return y[1]-x[1]});d.sort(function(x,y){return y[1]-x[1]});
-  var i=0,j=0;
-  while(i<c.length&&j<d.length){
-    var t=Math.min(c[i][1],d[j][1]);
-    if(t>0)out.push([d[j][0],c[i][0],t]);
-    c[i][1]-=t;d[j][1]-=t;
-    if(c[i][1]===0)i++;
-    if(d[j][1]===0)j++;
-  }
+// New records (v:2): the payer takes the leftover kuruş, so nobody owes the payer an odd kuruş. Older records keep their old split.
+function sharesOf(e){
+  if(e.custom)return e.custom;
+  if(e.v===2&&e.shares.indexOf(e.payer)>=0){var o=split(e.amount-e.amount%e.shares.length,e.shares);o[e.payer]+=e.amount%e.shares.length;return o}
+  return split(e.amount,e.shares);
+}
+// Who owes whom: everyone owes the person who actually paid. Only debts between the same two people are netted.
+function pairs(){
+  var m={},k,out=[];
+  function add(a,b,x){if(a===b||!x)return;if(a<b)m[a+"|"+b]=(m[a+"|"+b]||0)+x;else m[b+"|"+a]=(m[b+"|"+a]||0)-x}
+  items.forEach(function(e){
+    if(e.type==="expense"&&e.payer!==POOL){var s=sharesOf(e),n;for(n in s)add(n,e.payer,s[n])}
+    else if(e.type==="payment"&&e.from!==POOL&&e.to!==POOL)add(e.to,e.from,e.amount);
+  });
+  for(k in m){var ab=k.split("|"),v=m[k];if(v>0)out.push([ab[0],ab[1],v]);else if(v<0)out.push([ab[1],ab[0],-v])}
+  var ord=function(n){var i=P.indexOf(n);return i<0?999:i};
+  out.sort(function(x,y){return ord(x[0])-ord(y[0])||y[2]-x[2]});
   return out;
 }
 function calc(){
-  var bA={},bP={},pool=0;
-  P.forEach(function(p){bA[p]=0;bP[p]=0});
+  var bP={},pool=0;
+  P.forEach(function(p){bP[p]=0});
+  function add(p,x){bP[p]=(bP[p]||0)+x}
   items.forEach(function(e){
     var a=e.amount,k,s;
-    if(e.type==="expense"){
-      s=sharesOf(e);
-      if(e.payer===POOL){pool-=a;for(k in s)bP[k]+=s[k]}
-      else{bA[e.payer]+=a;for(k in s)bA[k]-=s[k]}
-    }else if(e.type==="deposit"){bP[e.payer]-=a;pool+=a}
+    if(e.type==="expense"&&e.payer===POOL){s=sharesOf(e);pool-=a;for(k in s)add(k,s[k])}
+    else if(e.type==="deposit"){add(e.payer,-a);pool+=a}
     else if(e.type==="payment"){
-      if(e.from===POOL){bP[e.to]+=a;pool-=a}
-      else if(e.to===POOL){bP[e.from]-=a;pool+=a}
-      else{bA[e.from]+=a;bA[e.to]-=a}
+      if(e.from===POOL){add(e.to,a);pool-=a}
+      else if(e.to===POOL){add(e.from,-a);pool+=a}
     }
   });
-  return {bA:bA,bP:bP,pool:pool};
+  return {bP:bP,pool:pool};
 }
 
 // ---- Every change goes through logged(): the change and its log entry are written together.
 function recState(id){var i;for(i=0;i<items.length;i++)if(items[i].id===id)return "on";for(i=0;i<trash.length;i++)if(trash[i].id===id)return "del";return "none"}
 function personState(n){return P.indexOf(n)<0?"none":ACT.indexOf(n)>=0?"on":"off"}
-function used(n){return items.concat(trash).some(function(e){return e.payer===n||e.from===n||e.to===n||(e.shares&&e.shares.indexOf(n)>=0)||(e.custom&&e.custom[n]!=null)})}
 function recWrite(b,id,st){b.set(doc(col,id),st==="del"?{deleted:true,deletedAt:Date.now()}:{deleted:false},{merge:true})}
 function personWrite(b,n,st){
   var o={};
-  if(!pdExists)P.forEach(function(x){o[x]={on:ACT.indexOf(x)>=0,t:PT[x]}});
+  if(!pdExists)P.forEach(function(x,i){o[x]={on:ACT.indexOf(x)>=0,t:PT[x]!=null?PT[x]:i}});
   o[n]=st==="none"?deleteField():{on:st==="on",t:PT[n]!=null?PT[n]:Date.now()};
   b.set(doc(col,"_people"),{type:"people",people:o},{merge:true});
 }
+// The page shows the result at once: the phone applies the change locally and sends it when it can (offline too).
 function logged(label,entry,apply){
   var b=writeBatch(db),id=lid(),en=Object.assign({type:"log",at:Date.now(),label:label,undone:false},entry);
   apply(b);b.set(doc(col,id),en);
-  b.commit().then(function(){var full=Object.assign({id:id},en);msg(label+" ✓","Geri al",function(){undo(id,full)});hideMsgLater(10000)},fail);
+  b.commit().then(null,fail);
+  var full=Object.assign({id:id},en);
+  hold(id,1000);msg(label+" ✓","Geri al",function(){return undo(id,full)});hideMsgLater(10000);
 }
+// A line that was just used ignores taps for a moment, so a double tap cannot undo and then redo.
+function hold(id,ms){busy[id]=1;setTimeout(function(){delete busy[id];if(loaded)renderGecmis()},ms)}
 function findLog(id,fb){for(var i=0;i<logs.length;i++)if(logs[i].id===id)return logs[i];return fb||null}
 function stateOf(en){return en.kind==="rec"?recState(en.target):personState(en.target)}
 function canUndo(en){return !en.undone&&(en.kind==="load"||stateOf(en)===en.to)}
 function canRedo(en){return en.undone&&(en.kind==="load"||stateOf(en)===en.undoState)}
 function undo(id,fb){
+  if(busy[id])return false;
   var en=findLog(id,fb);
   if(!en||!canUndo(en)){msg("Bu işlem sonradan değişti. Önce sonraki işlemi geri al.");hideMsgLater(6000);return}
-  if(en.kind==="load"){switchLoad(en,true);return}
+  if(en.kind==="load")return switchLoad(en,true);
   var st=en.from;
   if(en.kind==="rec"&&st==="none")st="del";
-  if(en.kind==="person"&&st==="none"&&used(en.target))st="off";
+  // Undoing "person added" only takes the person out of the group; the name stays, so records on other phones keep it.
+  if(en.kind==="person"&&st==="none")st="off";
   if(en.kind==="person"&&st!=="on"&&ACT.length<2&&ACT[0]===en.target){msg("Grupta en az bir kişi kalmalı.");hideMsgLater(6000);return}
   var b=writeBatch(db);
   if(en.kind==="rec")recWrite(b,en.target,st);else personWrite(b,en.target,st);
   b.set(doc(col,en.id),{undone:true,undoState:st,undoneAt:Date.now()},{merge:true});
-  b.commit().then(function(){
-    var en2=Object.assign({},en,{undone:true,undoState:st});
-    msg("Geri alındı: "+en.label,"Yeniden yap",function(){redo(en.id,en2)});hideMsgLater(10000);
-  },fail);
+  b.commit().then(null,fail);
+  var en2=Object.assign({},en,{undone:true,undoState:st});
+  hold(en.id,1500);msg("Geri alındı: "+en.label,"Yeniden yap",function(){return redo(en.id,en2)});hideMsgLater(10000);
 }
 function redo(id,fb){
+  if(busy[id])return false;
   var en=findLog(id,fb);
   if(!en||!canRedo(en)){msg("Bu işlem sonradan değişti. Önce sonraki işlemi geri al.");hideMsgLater(6000);return}
-  if(en.kind==="load"){switchLoad(en,false);return}
+  if(en.kind==="load")return switchLoad(en,false);
   var b=writeBatch(db);
   if(en.kind==="rec")recWrite(b,en.target,en.to);else personWrite(b,en.target,en.to);
   b.set(doc(col,en.id),{undone:false},{merge:true});
-  b.commit().then(function(){
-    var en2=Object.assign({},en,{undone:false});
-    msg("Yeniden yapıldı: "+en.label,"Geri al",function(){undo(en.id,en2)});hideMsgLater(10000);
-  },fail);
+  b.commit().then(null,fail);
+  var en2=Object.assign({},en,{undone:false});
+  hold(en.id,1500);msg("Yeniden yapıldı: "+en.label,"Geri al",function(){return undo(en.id,en2)});hideMsgLater(10000);
 }
 
 function renderTabs(){
@@ -218,26 +252,44 @@ function payRow(from,to,amt,label){
   var btn=payKey===k?'<button class="ok" data-pdo="'+a+'">Evet, ödendi</button> <button class="sm" data-pno="1">Vazgeç</button>':'<button class="nb" data-pay="'+a+'">Borcu kapat</button>';
   return '<div class="row"><span>'+label+'</span><div style="text-align:right;flex-shrink:0"><div>'+tl(amt)+'</div>'+btn+'</div></div>';
 }
+// The records that decide one debt line: only these go into its "Borcu kapat" id, so phones that differ in unrelated records still agree.
+function rel(e,a,b){
+  var sh=function(x){return e.shares.indexOf(x)>=0||(e.custom&&e.custom[x]!=null)};
+  if(a===POOL||b===POOL){var p=a===POOL?b:a;
+    if(e.type==="expense")return e.payer===POOL&&sh(p);
+    if(e.type==="deposit")return e.payer===p;
+    return (e.from===POOL&&e.to===p)||(e.to===POOL&&e.from===p)}
+  if(e.type==="expense")return (e.payer===a&&sh(b))||(e.payer===b&&sh(a));
+  if(e.type==="payment")return (e.from===a&&e.to===b)||(e.from===b&&e.to===a);
+  return false;
+}
+function sig(a,b){return hash(items.filter(function(e){return rel(e,a,b)}).map(function(e){return e.id}).sort().join(","))}
 function renderOzet(){
   if(!loaded){$("v-ozet").innerHTML='<div class="card mu">Kayıtlar yükleniyor…</div>';return}
-  var d=calc(),tr=settle(d.bA),tot=0,ptot=0,pool=d.pool;
-  var h='<div class="card"><h2>Havuzda kalan</h2><div class="big '+(pool<0?"neg":"")+'">'+(pool<0?"−":"")+tl(pool)+'</div><div class="mu">Toplanıp henüz harcanmayan para</div></div>';
-  h+='<div class="card"><h2>Kişilere borç (kim kime)</h2>';
+  var d=calc(),tr=pairs(),tot=0,ptot=0,pool=d.pool,cr=[];
+  var h=pool>=0?'<div class="card"><h2>Kasada kalan</h2><div class="big">'+tl(pool)+'</div><div class="mu">Kasaya yatırılıp henüz harcanmayan para.</div></div>'
+    :'<div class="card"><h2>Kasa açığı</h2><div class="big neg">−'+tl(pool)+'</div><div class="mu">Kasadan ödenen ama henüz kasaya yatırılmamış para. Aşağıdaki "Kasaya borç" ödenince kapanır. Para toplandıysa Ekle → Havuza para ile kaydet.</div></div>';
+  h+='<div class="card"><h2>Kişilere borç (kim kime)</h2><div class="mu" style="margin-bottom:4px">Herkes payını, parayı kim ödediyse ona öder.</div>';
   if(!tr.length)h+='<div class="mu">Kişiler arasında borç yok.</div>';
   tr.forEach(function(t){tot+=t[2];h+=payRow(t[0],t[1],t[2],esc(t[0])+' → <b>'+esc(t[1])+'</b>')});
   h+='<div class="row"><b>Toplam</b><b>'+tl(tot)+'</b></div></div>';
   h+='<div class="card"><h2>Kasaya borç</h2>';
-  var any=false;
-  P.forEach(function(p){var v=d.bP[p];
-    if(v>0){any=true;ptot+=v;h+=payRow(p,POOL,v,esc(p)+' → <b>Havuz (kasa)</b>')}
-    else if(v<0){any=true;h+=payRow(POOL,p,-v,'Havuz (kasa) → <b>'+esc(p)+'</b> (iade)')}});
-  if(!any)h+='<div class="mu">Kasaya borç yok.</div>';
-  h+='<div class="row"><b>Kasaya toplam borç</b><b>'+tl(ptot)+'</b></div></div>';
+  P.forEach(function(p){var v=d.bP[p]||0;
+    if(v>0){ptot+=v;h+=payRow(p,POOL,v,esc(p)+' → <b>Havuz (kasa)</b>')}
+    else if(v<0)cr.push([p,-v])});
+  if(!ptot)h+='<div class="mu">Kasaya borç yok.</div>';
+  h+='<div class="row"><b>Kasaya toplam borç</b><b>'+tl(ptot)+'</b></div>';
+  if(cr.length){
+    h+='<h2 style="margin-top:14px">Kasada alacağı olan</h2>';
+    cr.forEach(function(c){h+='<div class="row"><span>'+esc(c[0])+'</span><span class="pos">+'+tl(c[1])+'</span></div>'});
+    h+='<div class="mu" style="margin-top:6px">Kasaya payından fazla yatırılan para. Sonraki kasa harcamalarında payından düşülür. Gerekirse Çıkar sekmesinden kasadan iade et.</div>';
+  }
+  h+='</div>';
   h+='<div class="card"><h2>Kişi başı toplam</h2>';
   P.forEach(function(p){
     var owe=0,get=0;
     tr.forEach(function(t){if(t[0]===p)owe+=t[2];if(t[1]===p)get+=t[2]});
-    var kp=Math.max(d.bP[p],0),ki=Math.max(-d.bP[p],0),net=get+ki-owe-kp;
+    var bp=d.bP[p]||0,kp=Math.max(bp,0),ki=Math.max(-bp,0),net=get+ki-owe-kp;
     if(ACT.indexOf(p)<0&&!owe&&!get&&!kp&&!ki)return;
     h+='<div class="row"><div><div>'+esc(p)+'</div><div class="mu">kişilere '+tl(owe)+' · kasaya '+tl(kp)+(get+ki?' · alacak '+tl(get+ki):'')+'</div></div><span class="'+(net>0?"pos":net<0?"neg":"mu")+'">'+(net>0?"+":net<0?"−":"")+tl(net)+'</span></div>';
   });
@@ -247,56 +299,78 @@ function renderOzet(){
   vo.querySelectorAll("[data-pay]").forEach(function(x){x.onclick=function(){payKey=x.dataset.pay;renderOzet()}});
   vo.querySelectorAll("[data-pno]").forEach(function(x){x.onclick=function(){payKey=null;renderOzet()}});
   vo.querySelectorAll("[data-pdo]").forEach(function(x){x.onclick=function(){
-    var f=x.dataset.pdo.split("|"),a=parseInt(f[2],10),nid=uid();payKey=null;
-    if(!isPP(f[0])||!isPP(f[1])||!(a>0))return;
-    logged("Borç kapatıldı: "+nm(f[0])+" → "+nm(f[1])+" · "+tl(a),{kind:"rec",target:nid,from:"none",to:"on"},
+    x.disabled=true;
+    var f=x.dataset.pdo.split("|"),a=parseInt(f[2],10);payKey=null;
+    if(!isPP(f[0])||!isPP(f[1])||!(a>0)){renderOzet();return}
+    // The same debt closed from two phones gets the same record id, so it is counted once.
+    var nid="p"+hash(f[0]+"|"+f[1]+"|"+a+"|"+sig(f[0],f[1])),was=recState(nid);
+    if(was==="on"){msg("Bu borç zaten kapatılmış.");hideMsgLater();renderOzet();return}
+    logged("Borç kapatıldı: "+nm(f[0])+" → "+nm(f[1])+" · "+tl(a),{kind:"rec",target:nid,from:was,to:"on"},
       function(b){b.set(doc(col,nid),{type:"payment",from:f[0],to:f[1],amount:a,ts:Date.now(),desc:"Ödeme"})});
     renderOzet();
   }});
 }
 
-function opts(withPool){return (withPool?[POOL]:[]).concat(ACT).map(function(p){return '<option value="'+esc(p)+'">'+esc(nm(p))+'</option>'}).join("")}
-function renderEkle(){
+// Form fields keep what was typed when the page redraws (another phone changed something).
+function grab(ids){var o={};ids.forEach(function(i){var el=$(i);if(el)o[i]=el.value});return o}
+function put(o){for(var i in o){var el=$(i);if(!el)continue;if(el.tagName==="SELECT"){if([].some.call(el.options,function(x){return x.value===o[i]&&!x.disabled}))el.value=o[i]}else el.value=o[i]}}
+function opts(withPool,all){
+  return '<option value="" selected disabled>Seç</option>'+(withPool?[POOL]:[]).concat(all?P:ACT).map(function(p){
+    return '<option value="'+esc(p)+'">'+esc(nm(p))+(p!==POOL&&ACT.indexOf(p)<0?' (gruptan çıktı)':'')+'</option>'}).join("");
+}
+function renderEkle(reset){
+  var st=reset?null:grab(["f-d","f-a","f-p"]),sh=null,cb=document.querySelectorAll(".f-s");
+  if(!reset&&cb.length){sh={};cb.forEach(function(x){sh[x.value]=x.checked})}
+  // A person added meanwhile is ticked when everyone else still is.
+  var allOn=!sh||Object.keys(sh).every(function(k){return sh[k]});
   var tabsH='<div class="tabs"><button data-m="exp" class="'+(mode==="exp"?"on":"")+'">Harcama</button><button data-m="dep" class="'+(mode==="dep"?"on":"")+'">Havuza para</button></div>';
   var f='';
   if(mode==="exp"){
     f='<label>Açıklama</label><input type="text" id="f-d" placeholder="örn. Akşam yemeği">'+
-    '<label>Tutar (TL)</label><input type="number" id="f-a" inputmode="decimal" step="0.01">'+
+    '<label>Tutar (TL)</label>'+amtField("f-a")+
     '<label>Kim ödedi?</label><select id="f-p">'+opts(true)+'</select>'+
-    '<label>Kimler paylaşıyor?</label><div class="chips">'+ACT.map(function(p){return '<label><input type="checkbox" class="f-s" value="'+esc(p)+'" checked>'+esc(p)+'</label>'}).join("")+'</div>';
+    '<label>Kimler paylaşıyor?</label><div class="chips">'+ACT.map(function(p){return '<label><input type="checkbox" class="f-s" value="'+esc(p)+'"'+(sh?((p in sh?sh[p]:allOn)?' checked':''):' checked')+'>'+esc(p)+'</label>'}).join("")+'</div>';
   }else{
-    f='<label>Kim yatırdı?</label><select id="f-p">'+opts(false)+'</select><label>Tutar (TL)</label><input type="number" id="f-a" inputmode="decimal" step="0.01">';
+    f='<label>Kim yatırdı?</label><select id="f-p">'+opts(false)+'</select><label>Tutar (TL)</label>'+amtField("f-a");
   }
-  $("v-ekle").innerHTML='<div class="card">'+tabsH+f+'<button class="btn" id="save">Kaydet</button><div class="mu" id="err" style="margin-top:8px"></div></div>';
-  $("v-ekle").querySelectorAll("[data-m]").forEach(function(x){x.onclick=function(){mode=x.dataset.m;renderEkle()}});
+  $("v-ekle").innerHTML='<div class="card">'+tabsH+f+'<button class="btn" id="save">Kaydet</button><div class="mu" id="err" style="margin-top:8px;color:var(--neg)"></div></div>';
+  if(st)put(st);
+  bindAmt("f-a");
+  $("v-ekle").querySelectorAll("[data-m]").forEach(function(x){x.onclick=function(){mode=x.dataset.m;renderEkle(true)}});
   $("save").onclick=save;
 }
 function save(){
-  var err=$("err"),a=Math.round(parseFloat($("f-a").value.replace(",","."))*100);
-  if(!(a>0)){err.textContent="Geçerli bir tutar gir.";return}
+  var err=$("err"),a=parseTL($("f-a").value),p=$("f-p").value;
   var d={amount:a,ts:Date.now()},label;
   if(mode==="exp"){
     var sh=[].slice.call(document.querySelectorAll(".f-s:checked")).map(function(x){return x.value});
     var ds=$("f-d").value.trim();
     if(!ds){err.textContent="Açıklama yaz.";return}
+    if(!(a>0)){err.textContent="Tutarı anlaşılır yaz. Örnek: 400 veya 1.250,50";return}
+    if(!p){err.textContent="Kimin ödediğini seç.";return}
     if(!sh.length){err.textContent="En az bir kişi seç.";return}
-    d.type="expense";d.desc=ds;d.payer=$("f-p").value;d.shares=sh;label="Harcama eklendi: "+ds+" · "+tl(a);
-  }else{d.type="deposit";d.payer=$("f-p").value;d.desc="Havuza yatırdı";label="Havuza para eklendi: "+d.payer+" · "+tl(a)}
+    d.type="expense";d.desc=ds;d.payer=p;d.shares=sh;d.v=2;label="Harcama eklendi: "+ds+" · "+tl(a)+" · "+nm(p)+" ödedi";
+  }else{
+    if(!p){err.textContent="Kimin yatırdığını seç.";return}
+    if(!(a>0)){err.textContent="Tutarı anlaşılır yaz. Örnek: 400 veya 1.250,50";return}
+    d.type="deposit";d.payer=p;d.desc="Havuza yatırdı";label="Havuza para eklendi: "+p+" · "+tl(a);
+  }
   var nid=uid();
   logged(label,{kind:"rec",target:nid,from:"none",to:"on"},function(b){b.set(doc(col,nid),d)});
-  tab="ozet";renderEkle();show();
+  tab="ozet";renderEkle(true);show();
 }
 
+// Returns true when the people list changed.
 function setPeople(pd){
   var m=pd&&pd.people&&typeof pd.people==="object"?pd.people:null,list=[],k;
   if(m)for(k in m){var v=m[k];if(NAME_RE.test(k)&&k!==POOL&&v&&typeof v==="object")list.push([k,v.on!==false,typeof v.t==="number"?v.t:0])}
   pdExists=list.length>0;
   if(!list.length)list=DEF.map(function(n,i){return [n,true,i]});
   list.sort(function(a,b){return a[2]-b[2]});
-  var key=JSON.stringify(list);if(key===PKEY)return;PKEY=key;
-  P=list.map(function(x){return x[0]});ACT=list.filter(function(x){return x[1]}).map(function(x){return x[0]});
+  var key=JSON.stringify(list);if(key===PKEY)return false;PKEY=key;
+  P0=list.map(function(x){return x[0]});ACT=list.filter(function(x){return x[1]}).map(function(x){return x[0]});
   PT={};list.forEach(function(x){PT[x[0]]=x[2]});
-  renderEkle();renderCikar();
+  return true;
 }
 function addPerson(){
   var n=$("np").value.trim().replace(/\s+/g," "),er=$("nperr");
@@ -307,21 +381,25 @@ function addPerson(){
   logged(same?"Gruba geri eklendi: "+nn:"Kişi eklendi: "+nn,{kind:"person",target:nn,from:same?"off":"none",to:"on"},function(b){personWrite(b,nn,"on")});
   $("np").value="";er.textContent="";
 }
-function renderCikar(){
+function renderCikar(reset){
+  var st=reset?null:grab(["c-p","c-q","c-a"]);
   $("v-cikar").innerHTML='<div class="card"><h2>Borç kapat</h2><div class="mu">Ödenen para borçtan düşülür: ödeyenin borcu, alanın alacağı ve kasa birlikte güncellenir.</div>'+
-  '<label>Kim ödedi?</label><select id="c-p">'+opts(true)+'</select><label>Kime?</label><select id="c-q">'+opts(true)+'</select>'+
-  '<label>Tutar (TL)</label><input type="number" id="c-a" inputmode="decimal" step="0.01">'+
-  '<button class="btn" id="c-save">Çıkar</button><div class="mu" id="c-err" style="margin-top:8px"></div></div>';
+  '<label>Kim ödedi?</label><select id="c-p">'+opts(true,true)+'</select><label>Kime?</label><select id="c-q">'+opts(true,true)+'</select>'+
+  '<label>Tutar (TL)</label>'+amtField("c-a")+
+  '<button class="btn" id="c-save">Çıkar</button><div class="mu" id="c-err" style="margin-top:8px;color:var(--neg)"></div></div>';
+  if(st)put(st);
+  bindAmt("c-a");
   $("c-save").onclick=saveCikar;
 }
 function saveCikar(){
-  var err=$("c-err"),a=Math.round(parseFloat($("c-a").value.replace(",","."))*100),f=$("c-p").value,t=$("c-q").value;
-  if(!(a>0)){err.textContent="Geçerli bir tutar gir.";return}
+  var err=$("c-err"),a=parseTL($("c-a").value),f=$("c-p").value,t=$("c-q").value;
+  if(!f||!t){err.textContent="Kimin ödediğini ve kime ödediğini seç.";return}
   if(f===t){err.textContent="Farklı iki taraf seç.";return}
+  if(!(a>0)){err.textContent="Tutarı anlaşılır yaz. Örnek: 400 veya 1.250,50";return}
   var nid=uid();
   logged("Borçtan düşüldü: "+nm(f)+" → "+nm(t)+" · "+tl(a),{kind:"rec",target:nid,from:"none",to:"on"},
     function(b){b.set(doc(col,nid),{type:"payment",from:f,to:t,amount:a,ts:Date.now(),desc:"Ödeme"})});
-  tab="ozet";renderCikar();show();
+  tab="ozet";renderCikar(true);show();
 }
 
 function bkName(k){return k==="before"?"Değişiklikten önceki hâl":k==="pasted"?"Yapıştırılan yedek":"Gece yedeği"}
@@ -329,7 +407,7 @@ function renderLog(){
   var h='<div class="card"><h2>İşlemler</h2><div class="mu" style="margin-bottom:4px">Yapılan her işlem burada. "Geri al" işlemi geri alır, "Yeniden yap" tekrar uygular.</div>';
   if(!logs.length)h+='<div class="mu" style="margin-top:6px">Henüz işlem yok.</div>';
   (logAll?logs:logs.slice(0,15)).forEach(function(en){
-    var id=esc(en.id),btn=canUndo(en)?'<button class="nb" data-lu="'+id+'">Geri al</button>':canRedo(en)?'<button class="nb" data-lr="'+id+'">Yeniden yap</button>':'<span class="mu">sonra değişti</span>';
+    var id=esc(en.id),btn=busy[en.id]?'<span class="mu">…</span>':canUndo(en)?'<button class="nb" data-lu="'+id+'">Geri al</button>':canRedo(en)?'<button class="nb" data-lr="'+id+'">Yeniden yap</button>':'<span class="mu">sonra değişti</span>';
     h+='<div class="row"><div><div'+(en.undone?' class="undone"':'')+'>'+esc(en.label)+'</div><div class="mu">'+esc(dt(en.at))+(en.undone?' · geri alındı':'')+'</div></div><div style="flex-shrink:0">'+btn+'</div></div>';
   });
   if(!logAll&&logs.length>15)h+='<button class="btn2" id="logall">Tümünü göster ('+logs.length+')</button>';
@@ -341,10 +419,7 @@ function renderGecmis(){
   if(!loaded)h+='<div class="mu">Kayıtlar yükleniyor…</div>';
   else if(!l.length)h+='<div class="mu">Henüz kayıt yok.</div>';
   l.forEach(function(e){
-    var t,s;
-    if(e.type==="expense"){t=e.desc;s=nm(e.payer)+' ödedi · '+e.shares.length+' kişi paylaşıyor'+(e.custom?' (özel paylaşım)':'')}
-    else if(e.type==="deposit"){t="Havuza para";s=e.payer+' yatırdı'}
-    else{t="Ödeme";s=nm(e.from)+' → '+nm(e.to)}
+    var t=e.type==="expense"?e.desc:e.type==="deposit"?"Havuza para":"Ödeme",s=who(e);
     if(e.ts)s+=' · '+dt(e.ts);
     var id=esc(e.id);
     h+='<div class="row"><div><div>'+esc(t)+'</div><div class="mu">'+esc(s)+'</div></div><div style="text-align:right"><div>'+tl(e.amount)+'</div>'+(delId===e.id?'<button class="sm" data-do="'+id+'">Evet, sil</button> <button class="sm" data-no="1">Vazgeç</button>':'<button class="sm" data-id="'+id+'">Sil</button>')+'</div></div>';
@@ -353,7 +428,7 @@ function renderGecmis(){
   if(trash.length){
     h+='<div class="card"><h2>Silinen kayıtlar</h2><div class="mu" style="margin-bottom:4px">Yanlışlıkla silinen kayıt buradan geri getirilir.</div>';
     trash.slice().sort(function(a,b){return b.deletedAt-a.deletedAt}).forEach(function(e){
-      h+='<div class="row"><div><div>'+esc(title(e))+'</div><div class="mu">silindi · '+esc(dt(e.deletedAt))+'</div></div><div style="text-align:right"><div>'+tl(e.amount)+'</div><button class="ok" data-undel="'+esc(e.id)+'">Geri getir</button></div></div>';
+      h+='<div class="row"><div><div>'+esc(e.type==="expense"?e.desc:title(e))+'</div><div class="mu">'+esc(who(e))+(e.ts?' · '+esc(dt(e.ts)):'')+'<br>silindi · '+esc(dt(e.deletedAt))+'</div></div><div style="text-align:right"><div>'+tl(e.amount)+'</div><button class="ok" data-undel="'+esc(e.id)+'">Geri getir</button></div></div>';
     });
     h+='</div>';
   }
@@ -369,7 +444,9 @@ function renderGecmis(){
   });
   h+='</div>';
   h+='<div class="card"><h2>Elle yedek</h2><div class="mu">Kayıtları metin olarak kopyalayıp bir yere saklayabilir, sonra buraya yapıştırıp yükleyebilirsin.</div><button class="btn2" id="bk">Yedeği kopyala</button><textarea id="bkt" rows="3" placeholder="Yedeği buraya yapıştır" style="margin-top:8px"></textarea><button class="btn2" id="rs">Yedeği yükle (herkes için mevcut kayıtların yerine geçer)</button></div>';
-  var vg=$("v-gecmis");vg.innerHTML=h;
+  var vg=$("v-gecmis"),kept=grab(["np","bkt"]),foc=document.activeElement&&document.activeElement.id;
+  vg.innerHTML=h;put(kept);
+  if((foc==="np"||foc==="bkt")&&$(foc))$(foc).focus();
   vg.querySelectorAll("[data-lu]").forEach(function(x){x.onclick=function(){x.disabled=true;undo(x.dataset.lu)}});
   vg.querySelectorAll("[data-lr]").forEach(function(x){x.onclick=function(){x.disabled=true;redo(x.dataset.lr)}});
   if($("logall"))$("logall").onclick=function(){logAll=true;renderGecmis()};
@@ -385,7 +462,7 @@ function renderGecmis(){
     renderGecmis();
   }});
   $("bk").onclick=function(){
-    var j=JSON.stringify(items.concat(trash));
+    var j=JSON.stringify(rawList());
     $("bkt").value=j;
     try{navigator.clipboard.writeText(j).then(function(){msg("Yedek kopyalandı ✓");hideMsgLater()},function(){msg("Yedek kutuya yazıldı, elle kopyala.")})}catch(e){msg("Yedek kutuya yazıldı, elle kopyala.")}
   };
@@ -408,76 +485,90 @@ function renderGecmis(){
 function prepare(a){
   a=Array.isArray(a)?a:[];
   var extra=[];
-  function add(n){if(typeof n==="string"&&n!==POOL&&NAME_RE.test(n)&&P.indexOf(n)<0&&extra.indexOf(n)<0)extra.push(n)}
+  function add(n){if(isP(n)&&P0.indexOf(n)<0&&extra.indexOf(n)<0)extra.push(n)}
   a.forEach(function(e){if(!e||typeof e!=="object")return;add(e.payer);add(e.from);add(e.to);if(Array.isArray(e.shares))e.shares.forEach(add);if(e.custom&&typeof e.custom==="object")Object.keys(e.custom).forEach(add)});
-  EXTRA=extra;
-  var next=a.map(function(e){return clean(e&&typeof e.id==="string"&&ID_RE.test(e.id)?e.id:uid(),e)}).filter(Boolean);
-  EXTRA=[];
-  var usedNames=extra.filter(function(n){return next.some(function(e){return e.payer===n||e.from===n||e.to===n||(e.shares&&e.shares.indexOf(n)>=0)||(e.custom&&e.custom[n]!=null)})});
-  return {next:next,extra:usedNames};
+  // Records are written back exactly as stored (raw), so fields and dates the page does not show are kept.
+  var next=[],rw={};
+  a.forEach(function(e){
+    var id=e&&typeof e.id==="string"&&ID_RE.test(e.id)?e.id:uid(),c=clean(id,e),r={},k;
+    if(!c)return;next.push(c);for(k in e)if(k!=="id")r[k]=e[k];rw[id]=r;
+  });
+  var usedNames=extra.filter(function(n){return next.some(function(e){return names(e).indexOf(n)>=0})});
+  return {next:next,extra:usedNames,rw:rw};
 }
-function addPeopleOff(extra){
+function addPeopleOff(b,extra){
   // Names a backup uses that are no longer in the list come back as "out of the group", so no record is dropped.
-  if(!extra.length)return Promise.resolve();
-  var b=writeBatch(db),o={},t=Date.now();
-  if(!pdExists)P.forEach(function(x){o[x]={on:ACT.indexOf(x)>=0,t:PT[x]}});
+  if(!extra.length)return;
+  var o={},t=Date.now();
+  if(!pdExists)P.forEach(function(x,i){o[x]={on:ACT.indexOf(x)>=0,t:PT[x]!=null?PT[x]:i}});
   extra.forEach(function(n,i){o[n]={on:false,t:t+i}});
   b.set(doc(col,"_people"),{type:"people",people:o},{merge:true});
-  return b.commit();
 }
-function saveSnap(){
-  var id="before-"+Date.now();
-  return setDoc(doc(bcol,id),{ts:Date.now(),kind:"before",count:items.length,data:JSON.stringify(items.concat(trash))}).then(function(){return id});
+// The records as they are now, taken once at the start of a load: both the "before" copy and the delete list use this same list.
+function rawList(){return items.concat(trash).map(function(e){return Object.assign({},raw[e.id]||data(e),{id:e.id})})}
+function snapDoc(cur){return {ts:Date.now(),kind:"before",count:cur.filter(function(e){return e.deleted!==true}).length,data:JSON.stringify(cur)}}
+var loading=false;
+function canLoad(){
+  if(loading){msg("Bir yükleme sürüyor, bitmesini bekle.");hideMsgLater(6000);return false}
+  if(!loaded||meta.fromCache||meta.hasPendingWrites||navigator.onLine===false){msg("Yedek yüklemek için internet bağlantısı gerekir. Bağlantı gelip bekleyen değişiklikler gönderilince tekrar dene.");hideMsgLater(8000);return false}
+  return true;
 }
-function applyRestore(next){
+// One load is one batch: the copies, the people list, the records and the log line land together or not at all,
+// so no phone ever sees half a load, and a closed page cannot leave one half done.
+function loadBatch(next,cur,rw,pre,post){
   var keep={};next.forEach(function(e){keep[e.id]=1});
-  var ops=items.concat(trash).filter(function(e){return !keep[e.id]}).map(function(e){return ["del",e.id]}).concat(next.map(function(e){return ["set",e.id,data(e)]}));
-  var chain=Promise.resolve();
-  for(var i=0;i<ops.length;i+=400)(function(part){chain=chain.then(function(){
-    var b=writeBatch(db);
-    part.forEach(function(o){if(o[0]==="del")b["delete"](doc(col,o[1]));else b.set(doc(col,o[1]),o[2])});
-    return b.commit();
-  })})(ops.slice(i,i+400));
-  return chain;
+  var ops=cur.filter(function(e){return !keep[e.id]}).map(function(e){return ["del",e.id]}).concat(next.map(function(e){return ["set",e.id,rw[e.id]||data(e)]}));
+  function put(b,part){part.forEach(function(o){if(o[0]==="del")b["delete"](doc(col,o[1]));else b.set(doc(col,o[1]),o[2])})}
+  if(ops.length<=450){var b=writeBatch(db);pre(b);put(b,ops);post(b);return b.commit()}
+  // Very large record sets do not fit one batch: copies first, then records in parts, the log line last.
+  var b0=writeBatch(db);pre(b0);var chain=b0.commit();
+  for(var i=0;i<ops.length;i+=450)(function(part){chain=chain.then(function(){var b=writeBatch(db);put(b,part);return b.commit()})})(ops.slice(i,i+450));
+  return chain.then(function(){var b=writeBatch(db);post(b);return b.commit()});
 }
 function restoreFrom(a,what,srcId){
+  if(!canLoad())return false;
   var pr=prepare(a),next=pr.next;
-  if(!next.length){msg("Yedekte geçerli kayıt yok.");return}
+  if(!next.length){msg("Yedekte geçerli kayıt yok.");return false}
   var nAct=next.filter(function(e){return !e.deleted}).length;
-  if(!confirm(what+": "+nAct+" kayıt yüklenecek ve şu anki "+items.length+" kaydın yerine geçecek. Herkes için değişir. Şu anki hâl Yedekler'e kaydedilir, yükleme İşlemler'den geri alınabilir. Devam edilsin mi?"))return;
+  if(!confirm(what+": "+nAct+" kayıt yüklenecek ve şu anki "+items.length+" kaydın yerine geçecek. Herkes için değişir. Şu anki hâl Yedekler'e kaydedilir, yükleme İşlemler'den geri alınabilir. Devam edilsin mi?"))return false;
+  if(!canLoad())return false;
   msg("Yedek yükleniyor…");
-  var prevId,nextId=srcId,lg=lid(),en;
-  saveSnap().then(function(id){
-    prevId=id;
-    if(nextId)return;
-    nextId="pasted-"+Date.now();
-    return setDoc(doc(bcol,nextId),{ts:Date.now(),kind:"pasted",count:nAct,data:JSON.stringify(next)});
-  }).then(function(){return addPeopleOff(pr.extra)})
-  .then(function(){return applyRestore(next)})
-  .then(function(){
-    en={type:"log",at:Date.now(),label:"Yedek yüklendi: "+what,undone:false,kind:"load",prevId:prevId,nextId:nextId};
-    return setDoc(doc(col,lg),en);
-  }).then(function(){
+  var t=Date.now(),prevId="before-"+t,nextId=srcId||("pasted-"+t),lg=lid(),cur=rawList();
+  var en={type:"log",at:t,label:"Yedek yüklendi: "+what,undone:false,kind:"load",prevId:prevId,nextId:nextId};
+  loading=true;
+  loadBatch(next,cur,pr.rw,function(b){
+    b.set(doc(bcol,prevId),snapDoc(cur));
+    if(!srcId)b.set(doc(bcol,nextId),{ts:t,kind:"pasted",count:nAct,data:JSON.stringify(next.map(function(e){return Object.assign({},pr.rw[e.id],{id:e.id})}))});
+    addPeopleOff(b,pr.extra);
+  },function(b){b.set(doc(col,lg),en)}).then(function(){
+    loading=false;
     var full=Object.assign({id:lg},en);bkList=null;renderGecmis();
-    msg("Yedek yüklendi ✓","Geri al",function(){undo(lg,full)});hideMsgLater(15000);
-  },fail);
+    msg("Yedek yüklendi ✓","Geri al",function(){return undo(lg,full)});hideMsgLater(15000);
+  },function(e){loading=false;fail(e)});
 }
 function switchLoad(en,isUndo){
-  if(!confirm((isUndo?"Yükleme geri alınacak":"Yükleme yeniden yapılacak")+": kayıtlar o hâline döner, sonradan yapılan değişiklikler de geri gider. Şu anki hâl Yedekler'e kaydedilir. Devam edilsin mi?"))return;
+  if(!canLoad())return false;
+  if(!confirm((isUndo?"Yükleme geri alınacak":"Yükleme yeniden yapılacak")+": kayıtlar o hâline döner, sonradan yapılan değişiklikler de geri gider. Şu anki hâl Yedekler'e kaydedilir. Devam edilsin mi?"))return false;
+  if(!canLoad())return false;
+  if(isUndo?!canUndo(findLog(en.id,en)):!canRedo(findLog(en.id,en))){msg("Bu işlem sonradan değişti.");hideMsgLater(6000);return false}
   msg(isUndo?"Geri alınıyor…":"Yeniden yapılıyor…");
-  var pr,snapId;
+  var snapId="before-"+Date.now(),cur=rawList();loading=true;
   getDoc(doc(bcol,isUndo?en.prevId:en.nextId)).then(function(s){
     if(!s.exists())throw {msg:"Bu yedek artık yok (yedekler 30 gün saklanır)."};
     var a;try{a=JSON.parse(s.data().data)}catch(e){throw {msg:"Bu yedek okunamadı."}}
-    pr=prepare(a);
-    return saveSnap();
-  }).then(function(id){snapId=id;return addPeopleOff(pr.extra)})
-  .then(function(){return applyRestore(pr.next)})
-  .then(function(){return setDoc(doc(col,en.id),isUndo?{undone:true,nextId:snapId,undoneAt:Date.now()}:{undone:false,prevId:snapId},{merge:true})})
-  .then(function(){
+    var pr=prepare(a);
+    if(!pr.next.length)throw {msg:"Bu yedekte kayıt yok, yüklenmedi. Kayıtlar olduğu gibi kaldı."};
+    // Another phone may have undone or redone this line while the copy was being read.
+    var l=findLog(en.id,en);
+    if(isUndo?!canUndo(l):!canRedo(l))throw {msg:"Bu işlem bu arada başka bir telefonda değişti. Kayıtlar olduğu gibi kaldı."};
+    if(meta.hasPendingWrites||meta.fromCache)throw {msg:"Bağlantı koptu, yüklenmedi. Kayıtlar olduğu gibi kaldı."};
+    return loadBatch(pr.next,cur,pr.rw,function(b){b.set(doc(bcol,snapId),snapDoc(cur));addPeopleOff(b,pr.extra)},
+      function(b){b.set(doc(col,en.id),isUndo?{undone:true,nextId:snapId,undoneAt:Date.now()}:{undone:false,prevId:snapId},{merge:true})});
+  }).then(function(){
+    loading=false;
     var en2=Object.assign({},en,isUndo?{undone:true,nextId:snapId}:{undone:false,prevId:snapId});bkList=null;
-    msg((isUndo?"Geri alındı: ":"Yeniden yapıldı: ")+en.label,isUndo?"Yeniden yap":"Geri al",function(){(isUndo?redo:undo)(en.id,en2)});hideMsgLater(15000);
-  },fail);
+    msg((isUndo?"Geri alındı: ":"Yeniden yapıldı: ")+en.label,isUndo?"Yeniden yap":"Geri al",function(){return (isUndo?redo:undo)(en.id,en2)});hideMsgLater(15000);
+  },function(e){loading=false;fail(e)});
 }
 function restore(){
   var a;
@@ -494,22 +585,37 @@ function refresh(){renderOzet();renderGecmis()}
 
 function listen(){
   timer=setTimeout(function(){if(!loaded)msg("Kayıtlara ulaşılamadı. İnternet bağlantını kontrol et.")},10000);
-  unsub=onSnapshot(col,function(snap){
+  unsub=onSnapshot(col,{includeMetadataChanges:true},function(snap){
     loaded=true;clearTimeout(timer);
-    var pd=null,recs=[],lg=[];
+    meta={fromCache:snap.metadata.fromCache,hasPendingWrites:snap.metadata.hasPendingWrites};
+    var pd=null,recs=[],lg=[],rw={};
     snap.docs.forEach(function(d){
       var x=d.data();
       if(d.id==="_people"){pd=x;return}
       if(x&&x.type==="log"){var l=cleanLog(d.id,x);if(l)lg.push(l);return}
-      recs.push([d.id,x]);
+      recs.push([d.id,x]);rw[d.id]=x;
     });
-    setPeople(pd);
+    var ch=setPeople(pd);
     var all=recs.map(function(r){return clean(r[0],r[1])}).filter(Boolean);
-    items=all.filter(function(e){return !e.deleted});trash=all.filter(function(e){return e.deleted});
+    // Names used in records but missing from the people list show as out of the group.
+    var np=P0.slice();all.forEach(function(e){names(e).forEach(function(n){if(np.indexOf(n)<0)np.push(n)})});
+    if(np.join("|")!==P.join("|")){P=np;ch=true}
+    raw=rw;items=all.filter(function(e){return !e.deleted});trash=all.filter(function(e){return e.deleted});
     logs=lg.sort(function(a,b){return b.at-a.at});
-    refresh();
+    if(ch){renderEkle();renderCikar()}
+    refresh();netBar();
   },function(e){msg("Kayıtlar okunamadı."+(e&&e.code?" ("+e.code+")":""))});
 }
+// A line under the title says when the phone is offline or still sending.
+function netBar(){
+  var el=$("net"),t="";
+  if(unlocked()&&loaded){
+    if(navigator.onLine===false||meta.fromCache)t="İnternet yok. Gördüğün kayıtlar bu telefondaki son hâl. Yaptığın değişiklikler bağlantı gelince herkese gider.";
+    else if(meta.hasPendingWrites)t="Değişiklikler gönderiliyor…";
+  }
+  el.textContent=t;el.classList.toggle("hide",!t);
+}
+window.addEventListener("online",netBar);window.addEventListener("offline",netBar);
 function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);if(v===null)localStorage.removeItem(k);else localStorage.setItem(k,v)}catch(e){return null}}
 function unlocked(){return ls(UK)===HASH}
 function lockState(){try{return JSON.parse(ls(LK))||{n:0,until:0}}catch(e){return {n:0,until:0}}}
